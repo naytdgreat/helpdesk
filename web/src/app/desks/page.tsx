@@ -451,7 +451,7 @@ export default function DesksPage() {
                         </div>
 
                         <div className="p-6 space-y-4">
-                            {['ADMIN', 'SUPER_ADMIN'].includes(profile?.role) ? (
+                            {profile?.role === 'SUPER_ADMIN' ? (
                                 <div className="space-y-1.5">
                                     <label className="text-sm font-semibold text-slate-700">Facility</label>
                                     <select

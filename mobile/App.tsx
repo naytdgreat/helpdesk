@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, TouchableOpacity, ScrollView, StatusBar, TextInput, ActivityIndicator, Modal } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, ScrollView, StatusBar, TextInput, ActivityIndicator, Modal, Alert } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList, DrawerItem } from '@react-navigation/drawer';
@@ -13,7 +14,12 @@ import {
     Info,
     Network,
     Monitor,
+    Laptop,
+    MousePointer2,
+    Keyboard,
+    Wifi,
     ClipboardList,
+    ShoppingBag,
     Settings,
     LogOut,
     Building,
@@ -28,17 +34,27 @@ import {
     User,
     MapPin,
     Plus,
+    PlusCircle,
     X,
     Save,
     Trash2,
     Archive,
     Calendar,
-    ChevronLeft
+    ChevronLeft,
+    Pencil
 } from 'lucide-react-native';
 import { supabase } from './lib/supabase';
 import { initDB, getDB } from './lib/db';
 import { SyncService } from './lib/sync';
 import Scanner from './components/Scanner';
+
+const generateBarcode = () => {
+    const prefix = 'ICT';
+    const now = new Date();
+    const dateStr = `${String(now.getDate()).padStart(2, '0')}${String(now.getMonth() + 1).padStart(2, '0')}${now.getFullYear()}`;
+    const randomChars = Math.random().toString(36).substring(2, 12).toUpperCase();
+    return `${prefix}-${dateStr}-${randomChars}`;
+};
 
 // --- Auth Component ---
 
@@ -54,13 +70,34 @@ function LoginScreen({ onLogin }: any) {
         }
         setLoading(true);
         try {
+            console.log(`[AUTH] Attempting login for ${email} at ${new Date().toISOString()}`);
             const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-            if (error) throw error;
+            if (error) {
+                console.error('[AUTH] Supabase error:', error);
+                throw error;
+            }
+            console.log('[AUTH] Login successful');
             onLogin(data.session);
         } catch (error: any) {
-            alert(error.message);
+            console.error('[AUTH] Catch block error:', error);
+            if (error.message === 'Network request failed') {
+                alert('Network Error: Could not reach the server. Please check your internet connection and ensure the server URL is correct.');
+            } else {
+                alert(error.message || 'An unknown error occurred during login');
+            }
         } finally {
             setLoading(false);
+        }
+    };
+
+    const testConnectivity = async () => {
+        try {
+            console.log('[AUTH] Testing connectivity to google.com...');
+            const res = await fetch('https://www.google.com', { method: 'HEAD' });
+            alert(`Connectivity Test: Success (Status ${res.status})`);
+        } catch (e: any) {
+            console.error('[AUTH] Connectivity test failed:', e);
+            alert(`Connectivity Test: Failed - ${e.message}`);
         }
     };
 
@@ -114,6 +151,13 @@ function LoginScreen({ onLogin }: any) {
                     </>
                 )}
             </TouchableOpacity>
+
+            <TouchableOpacity
+                style={{ marginTop: 20, padding: 10 }}
+                onPress={testConnectivity}
+            >
+                <Text style={{ color: '#64748b', textAlign: 'center', fontSize: 12 }}>Trouble connecting? Test Connectivity</Text>
+            </TouchableOpacity>
         </SafeAreaView>
     );
 }
@@ -133,6 +177,17 @@ function InventoryScreen({ navigation }: any) {
             LEFT JOIN offices o ON d.office_id = o.id
             ORDER BY d.created_at DESC
         `);
+        if (results && results.length > 0) {
+            const archived = results.filter(r => r.deployment_status?.toLowerCase() === 'archived');
+            console.log(`[INV] Fetched ${results.length} items. Archived count: ${archived.length}`);
+            if (archived.length > 0) {
+                console.log(`[INV] Sample Archived Item:`, JSON.stringify({
+                    id: archived[0].id,
+                    deployment_status: archived[0].deployment_status,
+                    office_name: archived[0].office_name
+                }));
+            }
+        }
         setDevices(results);
         setLoading(false);
     }, []);
@@ -147,9 +202,17 @@ function InventoryScreen({ navigation }: any) {
 
     return (
         <SafeAreaView style={styles.container}>
-            <View style={styles.headerPadding}>
-                <Text style={styles.sectionTitle}>Hardware Inventory</Text>
-                <Text style={styles.subWelcome}>Track all registered assets ({devices.length})</Text>
+            <View style={[styles.headerPadding, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
+                <View>
+                    <Text style={styles.sectionTitle}>Hardware Inventory</Text>
+                    <Text style={styles.subWelcome}>Track all registered assets ({devices.length})</Text>
+                </View>
+                <TouchableOpacity
+                    style={{ backgroundColor: '#3b82f6', width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
+                    onPress={() => navigation.navigate('Overview', { screen: 'AddDevice' })}
+                >
+                    <Plus color="#fff" size={24} />
+                </TouchableOpacity>
             </View>
             <ScrollView contentContainerStyle={{ padding: 16 }}>
                 {devices.length === 0 ? (
@@ -176,7 +239,7 @@ function InventoryScreen({ navigation }: any) {
                                         ID: {item.barcode}
                                     </Text>
                                     <Text style={{ fontSize: 12, color: '#64748b' }} numberOfLines={1} ellipsizeMode="tail">
-                                        {item.office_name || 'Main Store'}
+                                        {item.deployment_status?.toLowerCase() === 'archived' ? 'Archived' : (item.office_name || 'Main Store')}
                                     </Text>
                                 </View>
                             </View>
@@ -189,7 +252,7 @@ function InventoryScreen({ navigation }: any) {
     );
 }
 
-function DesksScreen() {
+function DesksScreen({ navigation }: any) {
     const [desks, setDesks] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -216,27 +279,69 @@ function DesksScreen() {
 
     return (
         <SafeAreaView style={styles.container}>
-            <View style={styles.headerPadding}>
-                <Text style={styles.sectionTitle}>Facility Desks</Text>
-                <Text style={styles.subWelcome}>Deployment locations ({desks.length})</Text>
+            <View style={[styles.headerPadding, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
+                <View>
+                    <Text style={styles.sectionTitle}>Facility Desks</Text>
+                    <Text style={styles.subWelcome}>Deployment locations ({desks.length})</Text>
+                </View>
+                <TouchableOpacity
+                    style={{ backgroundColor: '#3b82f6', width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
+                    onPress={() => navigation.navigate('Overview', { screen: 'AddEditDesk' })}
+                >
+                    <Plus color="#fff" size={24} />
+                </TouchableOpacity>
             </View>
             <ScrollView contentContainerStyle={{ padding: 16 }}>
                 {desks.length === 0 ? (
                     <View style={styles.center}><Text style={{ color: '#94a3b8' }}>No desks found.</Text></View>
                 ) : (
                     desks.map(desk => (
-                        <View key={desk.id} style={styles.menuItem}>
+                        <TouchableOpacity
+                            key={desk.id}
+                            style={styles.menuItem}
+                            onPress={() => navigation.navigate('Overview', { screen: 'DeskDetails', params: { deskId: desk.id } })}
+                        >
                             <View style={styles.menuItemLeft}>
                                 <View style={styles.iconCircleSmall}>
                                     <LayoutDashboard color="#64748b" size={20} />
                                 </View>
                                 <View>
                                     <Text style={styles.menuLabel}>{desk.name}</Text>
-                                    <Text style={{ fontSize: 12, color: '#64748b' }}>{desk.wing_name} • {desk.office_name}</Text>
+                                    <Text style={{ fontSize: 12, color: '#64748b' }}>{desk.office_name} • {desk.wing_name}</Text>
+                                    <Text style={{ fontSize: 12, color: '#3b82f6', fontWeight: 'bold', marginTop: 2 }}>{desk.assigned_to_user || 'Unassigned'}</Text>
                                 </View>
                             </View>
-                            <Text style={{ fontSize: 12, color: '#3b82f6', fontWeight: 'bold' }}>{desk.assigned_to_user || 'Unassigned'}</Text>
-                        </View>
+                            <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+                                <TouchableOpacity onPress={(e) => {
+                                    e.stopPropagation();
+                                    navigation.navigate('Overview', { screen: 'AddEditDesk', params: { desk } });
+                                }}>
+                                    <Pencil color="#64748b" size={18} />
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={(e) => {
+                                    e.stopPropagation();
+                                    Alert.alert(
+                                        'Delete Desk',
+                                        'Are you sure? This will unassign any devices from this desk.',
+                                        [
+                                            { text: 'Cancel', style: 'cancel' },
+                                            {
+                                                text: 'Delete', style: 'destructive', onPress: async () => {
+                                                    const db = await getDB();
+                                                    await db.runAsync('UPDATE devices SET desk_id = NULL, office_id = NULL, deployment_status = "Available" WHERE desk_id = ?', [desk.id]);
+                                                    await db.runAsync('DELETE FROM desks WHERE id = ?', [desk.id]);
+                                                    await SyncService.trackChange('DELETE', 'desks', { id: desk.id });
+                                                    fetchItems();
+                                                }
+                                            }
+                                        ]
+                                    );
+                                }}>
+                                    <Trash2 color="#ef4444" size={18} />
+                                </TouchableOpacity>
+                                <ChevronRight color="#cbd5e1" size={20} />
+                            </View>
+                        </TouchableOpacity>
                     ))
                 )}
             </ScrollView>
@@ -306,7 +411,7 @@ const StatusBadge = ({ status }: { status: string }) => {
 
     const s = status?.toLowerCase();
 
-    if (s === 'good' || s === 'available' || s === 'resolved' || s === 'approved') {
+    if (s === 'good' || s === 'available' || s === 'resolved' || s === 'approved' || s === 'fulfilled') {
         bg = '#dcfce7'; text = '#166534';
     } else if (s === 'faulty' || s === 'bad' || s === 'emergency' || s === 'rejected' || s === 'open' || s === 'scrapped') {
         bg = '#fee2e2'; text = '#991b1b';
@@ -403,7 +508,22 @@ function RequestsScreen({ navigation }: any) {
 
     const fetchItems = useCallback(async () => {
         const db = await getDB();
-        const results: any[] = await db.getAllAsync('SELECT * FROM requests ORDER BY created_at DESC');
+
+        // Integrity check: find Pending requests where all items are fulfilled
+        const pendingRequests: any[] = await db.getAllAsync("SELECT id FROM requests WHERE status = 'Pending'");
+        for (const req of pendingRequests) {
+            const items: any[] = await db.getAllAsync("SELECT status FROM request_items WHERE request_id = ?", [req.id]);
+            if (items.length > 0 && items.every(i => i.status === 'Fulfilled')) {
+                await db.runAsync("UPDATE requests SET status = 'Fulfilled' WHERE id = ?", [req.id]);
+                await SyncService.trackChange('UPDATE', 'requests', { id: req.id, status: 'Fulfilled' });
+            }
+        }
+
+        const results: any[] = await db.getAllAsync(`
+            SELECT r.*, (SELECT COUNT(*) FROM request_items WHERE request_id = r.id) as item_count 
+            FROM requests r 
+            ORDER BY created_at DESC
+        `);
         setRequests(results);
         setLoading(false);
     }, []);
@@ -427,24 +547,30 @@ function RequestsScreen({ navigation }: any) {
                     <View style={styles.center}><Text style={{ color: '#94a3b8' }}>No pending requests.</Text></View>
                 ) : (
                     requests.map(item => (
-                        <View key={item.id} style={[styles.menuItem, { flexDirection: 'column', alignItems: 'flex-start' }]}>
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 4 }}>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                    <View style={[styles.iconCircleSmall, { backgroundColor: '#e0f2fe' }]}>
-                                        <Package color="#0284c7" size={18} />
-                                    </View>
-                                    <Text style={[styles.menuLabel, { fontSize: 16 }]}>{item.item_type} (x{item.quantity})</Text>
+                        <TouchableOpacity
+                            key={item.id}
+                            style={styles.menuItem}
+                            onPress={() => navigation.navigate('Overview', { screen: 'RequestDetails', params: { requestId: item.id } })}
+                        >
+                            <View style={[styles.menuItemLeft, { flex: 1 }]}>
+                                <View style={[styles.iconCircleSmall, { backgroundColor: '#e0f2fe' }]}>
+                                    <ShoppingBag color="#0284c7" size={18} />
                                 </View>
-                                <StatusBadge status={item.status} />
+                                <View style={{ flex: 1 }}>
+                                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <Text style={styles.menuLabel} numberOfLines={1}>{item.reporter_name}</Text>
+                                        <StatusBadge status={item.status} />
+                                    </View>
+                                    <Text style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>
+                                        {item.item_count || 0} items requested
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                                        {new Date(item.created_at).toLocaleDateString()}
+                                    </Text>
+                                </View>
                             </View>
-                            <Text style={{ fontSize: 13, color: '#64748b', marginTop: 4, fontStyle: 'italic' }}>
-                                "{item.reason}"
-                            </Text>
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f1f5f9' }}>
-                                <Text style={{ fontSize: 12, color: '#94a3b8' }}>By: {item.reporter_name}</Text>
-                                <Text style={{ fontSize: 12, color: '#94a3b8' }}>{new Date(item.created_at).toLocaleDateString()}</Text>
-                            </View>
-                        </View>
+                            <ChevronRight color="#cbd5e1" size={20} />
+                        </TouchableOpacity>
                     ))
                 )}
             </ScrollView>
@@ -474,6 +600,65 @@ function RequestsScreen({ navigation }: any) {
     );
 }
 
+function RequestDetailsScreen({ route, navigation }: any) {
+    const { requestId } = route.params;
+    const [request, setRequest] = useState<any>(null);
+    const [items, setItems] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    const fetchDetails = async () => {
+        const db = await getDB();
+        const req = await db.getFirstAsync('SELECT * FROM requests WHERE id = ?', [requestId]);
+        setRequest(req);
+
+        const its: any[] = await db.getAllAsync('SELECT * FROM request_items WHERE request_id = ?', [requestId]);
+        setItems(its);
+        setLoading(false);
+    };
+
+    useEffect(() => {
+        fetchDetails();
+    }, [requestId]);
+
+    if (loading) return <View style={styles.center}><ActivityIndicator color="#3b82f6" /></View>;
+    if (!request) return <View style={styles.center}><Text>Request not found.</Text></View>;
+
+    return (
+        <SafeAreaView style={styles.container}>
+            <ScrollView contentContainerStyle={{ padding: 24 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.detailsTitle}>{request.reporter_name}</Text>
+                        <Text style={styles.detailsSubTitle}>{new Date(request.created_at).toLocaleString()}</Text>
+                    </View>
+                    <StatusBadge status={request.status} />
+                </View>
+
+                <Text style={styles.sectionTitle}>Requested Items</Text>
+
+                {items.length === 0 ? (
+                    <View style={styles.center}><Text style={{ color: '#94a3b8' }}>No items found.</Text></View>
+                ) : (
+                    items.map(item => (
+                        <View key={item.id} style={[styles.infoCard, { marginBottom: 12 }]}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#0f172a' }}>{item.item_type}</Text>
+                                    <Text style={{ fontSize: 12, color: '#64748b' }}>
+                                        Quantity: {item.quantity} (Fulfilled: {item.fulfilled_quantity || 0})
+                                    </Text>
+                                </View>
+                                <StatusBadge status={item.status} />
+                            </View>
+                        </View>
+                    ))
+                )}
+
+            </ScrollView>
+        </SafeAreaView>
+    );
+}
+
 function NotificationsScreen() {
     const [notifications, setNotifications] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -492,10 +677,16 @@ function NotificationsScreen() {
     );
 
     const markAllRead = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            alert('User not found. Please log in again.');
+            return;
+        }
+
         const db = await getDB();
         await db.runAsync('UPDATE notifications SET is_read = 1');
         // Track change for sync
-        SyncService.trackChange('UPDATE', 'notifications_all_read', { is_read: true });
+        SyncService.trackChange('UPDATE', 'notifications_all_read', { is_read: true, user_id: user.id });
         fetchItems();
     };
 
@@ -578,7 +769,7 @@ function SettingsScreen() {
 
     return (
         <SafeAreaView style={styles.container}>
-            <ScrollView contentContainerStyle={{ padding: 24 }}>
+            <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: 60 }}>
                 <Text style={styles.sectionTitle}>App Info</Text>
                 <View style={styles.menuList}>
                     <MenuLink icon={Info} label="Version" count="1.1.0" />
@@ -608,7 +799,7 @@ function SettingsScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                    style={[styles.actionBtn, { borderColor: '#ef4444', height: 48, borderRadius: 12, borderWidth: 1, justifyContent: 'center' }]}
+                    style={[styles.actionBtn, { borderColor: '#ef4444', borderRadius: 12, borderWidth: 1, justifyContent: 'center', width: '100%', paddingVertical: 14 }]}
                     onPress={clearQueue}
                 >
                     <Text style={{ color: '#ef4444', fontWeight: 'bold', textAlign: 'center' }}>Clear Sync Queue</Text>
@@ -619,21 +810,32 @@ function SettingsScreen() {
 
 
                 <TouchableOpacity
-                    style={[styles.actionBtn, { backgroundColor: '#ef4444', height: 48, borderRadius: 12, justifyContent: 'center' }]}
+                    style={[styles.actionBtn, { backgroundColor: '#ef4444', borderRadius: 12, justifyContent: 'center', width: '100%', paddingVertical: 14 }]}
                     onPress={async () => {
                         if (syncing) return;
                         setSyncing(true);
                         try {
                             const db = await getDB();
                             // Clear all data
-                            await db.runAsync('DELETE FROM sync_queue');
-                            await db.runAsync('DELETE FROM maintenance_logs');
-                            await db.runAsync('DELETE FROM deployment_logs');
-                            await db.runAsync('DELETE FROM devices');
-                            await db.runAsync('DELETE FROM complaints');
-                            await db.runAsync('DELETE FROM requests');
-                            await db.runAsync('DELETE FROM notifications');
-                            await db.runAsync('DELETE FROM profiles');
+                            const tables = [
+                                'sync_queue',
+                                'maintenance_logs',
+                                'deployment_logs',
+                                'devices',
+                                'complaints',
+                                'requests',
+                                'request_items',
+                                'notifications',
+                                'profiles',
+                                'desks',
+                                'offices',
+                                'wings',
+                                'hospitals',
+                                'device_categories'
+                            ];
+                            for (const table of tables) {
+                                await db.runAsync(`DELETE FROM ${table}`);
+                            }
                             // Re-init by pulling
                             await SyncService.pullAll();
                             fetchQueue();
@@ -755,11 +957,11 @@ function HomeScreen({ navigation }: any) {
 function MenuLink({ icon: Icon, label, count, onPress }: any) {
     return (
         <TouchableOpacity style={styles.menuItem} onPress={onPress}>
-            <View style={styles.menuItemLeft}>
+            <View style={[styles.menuItemLeft, { flex: 1 }]}>
                 <View style={styles.iconCircleSmall}>
                     <Icon color="#64748b" size={20} />
                 </View>
-                <Text style={styles.menuLabel}>{label}</Text>
+                <Text style={[styles.menuLabel, { flex: 1 }]} numberOfLines={1} ellipsizeMode="tail">{label}</Text>
             </View>
             <View style={styles.menuItemRight}>
                 {count && <Text style={styles.menuCount}>{count}</Text>}
@@ -845,7 +1047,7 @@ function DeviceDetailsScreen({ route, navigation }: any) {
                     <View style={styles.divider} />
                     <DetailItem label="Facility" value={device.facility_name || 'Group Central'} />
                     <View style={styles.divider} />
-                    <DetailItem label="Current Location" value={device.office_name || 'IT Central Store'} />
+                    <DetailItem label="Current Location" value={device.deployment_status?.toLowerCase() === 'archived' ? 'Archived' : (device.office_name || 'Main Store')} />
                     <View style={styles.divider} />
                     <DetailItem label="IP Address" value={device.ip_address || 'N/A'} />
                     <View style={styles.divider} />
@@ -859,13 +1061,15 @@ function DeviceDetailsScreen({ route, navigation }: any) {
                         color="#3b82f6"
                         onPress={() => navigation.navigate('LogMaintenance', { device })}
                     />
+                    {device.deployment_status === 'Available' && (
+                        <ActionButton
+                            label="Deploy Asset"
+                            color="#06b6d4"
+                            onPress={() => navigation.navigate('DeployAsset', { device })}
+                        />
+                    )}
                     <ActionButton
-                        label="Deploy Asset"
-                        color="#06b6d4"
-                        onPress={() => navigation.navigate('DeployAsset', { device })}
-                    />
-                    <ActionButton
-                        label="Maintenance History"
+                        label="Status History"
                         color="#6366f1"
                         onPress={() => navigation.navigate('MaintenanceHistory', { deviceId: device.id })}
                     />
@@ -874,82 +1078,84 @@ function DeviceDetailsScreen({ route, navigation }: any) {
                         color="#10b981"
                         onPress={() => navigation.navigate('DeploymentHistory', { deviceId: device.id })}
                     />
-                    <ActionButton
-                        label="Retrieve Device"
-                        color="#8b5cf6"
-                        onPress={async () => {
-                            const db = await getDB();
-                            const now = new Date().toISOString();
+                    {(device.deployment_status === 'Deployed' || device.deployment_status === 'Archived') && (
+                        <ActionButton
+                            label="Retrieve Asset"
+                            color="#8b5cf6"
+                            onPress={async () => {
+                                const db = await getDB();
+                                const now = new Date().toISOString();
 
-                            // Reset to Available/Good and clear location
-                            await db.runAsync(
-                                'UPDATE devices SET deployment_status = ?, status = ?, desk_id = NULL, office_id = NULL WHERE id = ?',
-                                ['Available', 'Good', device.id]
-                            );
+                                // Reset to Available/Good and clear location
+                                await db.runAsync(
+                                    'UPDATE devices SET deployment_status = ?, status = ?, desk_id = NULL, office_id = NULL WHERE id = ?',
+                                    ['Available', 'Good', device.id]
+                                );
 
-                            // Track device update
-                            await SyncService.trackChange('UPDATE', 'devices', {
-                                id: device.id,
-                                deployment_status: 'Available',
-                                status: 'Good',
-                                desk_id: null,
-                                office_id: null
-                            });
+                                // Track device update
+                                await SyncService.trackChange('UPDATE', 'devices', {
+                                    id: device.id,
+                                    deployment_status: 'Available',
+                                    status: 'Good',
+                                    desk_id: null,
+                                    office_id: null
+                                });
 
-                            // Log check-in
-                            const logId = generateUUID();
-                            const logEntry = {
-                                id: logId,
-                                device_id: device.id,
-                                type: 'CheckIn',
-                                status: 'Available',
-                                hospital_id: device.hospital_id,
-                                performed_at: now
-                            };
+                                // Log check-in
+                                const logId = generateUUID();
+                                const logEntry = {
+                                    id: logId,
+                                    device_id: device.id,
+                                    type: 'CheckIn',
+                                    status: 'Available',
+                                    hospital_id: device.hospital_id,
+                                    performed_at: now
+                                };
 
-                            await db.runAsync(
-                                'INSERT INTO deployment_logs (id, device_id, type, status, hospital_id, performed_at) VALUES (?, ?, ?, ?, ?, ?)',
-                                [logEntry.id, logEntry.device_id, logEntry.type, logEntry.status, logEntry.hospital_id, logEntry.performed_at]
-                            );
+                                await db.runAsync(
+                                    'INSERT INTO deployment_logs (id, device_id, type, status, hospital_id, performed_at) VALUES (?, ?, ?, ?, ?, ?)',
+                                    [logEntry.id, logEntry.device_id, logEntry.type, logEntry.status, logEntry.hospital_id, logEntry.performed_at]
+                                );
 
-                            await SyncService.trackChange('INSERT', 'deployment_logs', logEntry);
+                                await SyncService.trackChange('INSERT', 'deployment_logs', logEntry);
 
-                            alert('Device retrieved to store.');
-                            navigation.goBack();
-                        }}
-                    />
-                    <ActionButton
-                        label="Move to Archive"
-                        color="#f59e0b"
-                        onPress={async () => {
-                            const db = await getDB();
-                            const now = new Date().toISOString();
-                            const payload = {
-                                id: device.id,
-                                status: 'Archived', // Archive usually maps to a status or we just keep it Good
-                                deployment_status: 'Archived',
-                                desk_id: null,
-                                office_id: null
-                            };
-                            // In the web app, archive sets physical_condition to the selected value. 
-                            // Let's use 'Good' or the current one for 'status' column to be safe.
-                            await db.runAsync('UPDATE devices SET deployment_status = ?, status = ?, desk_id = NULL, office_id = NULL WHERE id = ?', ['Archived', 'Good', device.id]);
-                            await SyncService.trackChange('UPDATE', 'devices', { ...payload, status: 'Good' });
-                            // Log it
-                            const logEntry = {
-                                id: generateUUID(),
-                                device_id: device.id,
-                                type: 'Archive',
-                                status: 'Archived',
-                                hospital_id: device.hospital_id,
-                                performed_at: now
-                            };
-                            await db.runAsync('INSERT INTO deployment_logs (id, device_id, type, status, hospital_id, performed_at) VALUES (?, ?, ?, ?, ?, ?)', [logEntry.id, logEntry.device_id, logEntry.type, logEntry.status, logEntry.hospital_id, logEntry.performed_at]);
-                            await SyncService.trackChange('INSERT', 'deployment_logs', logEntry);
-                            alert('Device archived.');
-                            navigation.goBack();
-                        }}
-                    />
+                                alert('Asset retrieved to store.');
+                                navigation.goBack();
+                            }}
+                        />
+                    )}
+                    {device.deployment_status !== 'Archived' && (
+                        <ActionButton
+                            label="Move to Archive"
+                            color="#f59e0b"
+                            onPress={async () => {
+                                const db = await getDB();
+                                const now = new Date().toISOString();
+                                const payload = {
+                                    id: device.id,
+                                    status: 'Archived',
+                                    deployment_status: 'Archived',
+                                    desk_id: null,
+                                    office_id: null
+                                };
+                                await db.runAsync('UPDATE devices SET deployment_status = ?, status = ?, desk_id = NULL, office_id = NULL WHERE id = ?', ['Archived', 'Archived', device.id]);
+                                await SyncService.trackChange('UPDATE', 'devices', { ...payload, status: 'Archived' });
+                                // Log it
+                                const logEntry = {
+                                    id: generateUUID(),
+                                    device_id: device.id,
+                                    type: 'Archive',
+                                    status: 'Archived',
+                                    hospital_id: device.hospital_id,
+                                    performed_at: now
+                                };
+                                await db.runAsync('INSERT INTO deployment_logs (id, device_id, type, status, hospital_id, performed_at) VALUES (?, ?, ?, ?, ?, ?)', [logEntry.id, logEntry.device_id, logEntry.type, logEntry.status, logEntry.hospital_id, logEntry.performed_at]);
+                                await SyncService.trackChange('INSERT', 'deployment_logs', logEntry);
+                                alert('Asset archived.');
+                                navigation.goBack();
+                            }}
+                        />
+                    )}
                     <ActionButton
                         label="Edit Details"
                         color="#64748b"
@@ -1013,6 +1219,485 @@ function MaintenanceHistoryScreen({ route }: any) {
                         </View>
                     ))
                 )}
+            </ScrollView>
+        </SafeAreaView>
+    );
+}
+
+function AddDeviceScreen({ navigation }: any) {
+    const [brand, setBrand] = useState('');
+    const [model, setModel] = useState('');
+    const [categoryId, setCategoryId] = useState('');
+    const [serialNumber, setSerialNumber] = useState('');
+    const [hospitalId, setHospitalId] = useState('');
+    const [ipAddress, setIpAddress] = useState('');
+    const [macAddress, setMacAddress] = useState('');
+
+    const [categories, setCategories] = useState<any[]>([]);
+    const [hospitals, setHospitals] = useState<any[]>([]);
+    const [userProfile, setUserProfile] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        const fetchData = async () => {
+            const db = await getDB();
+
+            // Fetch Profile for role-based hospital locking
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                const profile: any = await db.getFirstAsync('SELECT * FROM profiles WHERE id = ?', [user.id]);
+                setUserProfile(profile);
+                if (profile && profile.role !== 'SUPER_ADMIN' && profile.hospital_id) {
+                    setHospitalId(profile.hospital_id);
+                }
+            }
+
+            const catData: any[] = await db.getAllAsync('SELECT * FROM device_categories ORDER BY name');
+            setCategories(catData);
+            const hData: any[] = await db.getAllAsync('SELECT * FROM hospitals ORDER BY name');
+            setHospitals(hData);
+            setLoading(false);
+        };
+        fetchData();
+    }, []);
+
+    const handleSave = async () => {
+        if (!brand || !model || !categoryId || !hospitalId) {
+            alert('Please fill in required fields');
+            return;
+        }
+
+        try {
+            setSaving(true);
+            const db = await getDB();
+            const id = generateUUID();
+            const barcode = generateBarcode();
+            const now = new Date().toISOString();
+
+            const payload = {
+                id,
+                hospital_id: hospitalId,
+                barcode,
+                brand,
+                model,
+                category_id: categoryId,
+                serial_number: serialNumber || null,
+                ip_address: ipAddress || null,
+                mac_address: macAddress || null,
+                status: 'Good',
+                physical_condition: 'Good',
+                deployment_status: 'Available',
+                created_at: now
+            };
+
+            await db.runAsync(
+                `INSERT INTO devices (
+                    id, hospital_id, barcode, brand, model, category_id, 
+                    serial_number, ip_address, mac_address, status, 
+                    physical_condition, deployment_status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [id, payload.hospital_id, payload.barcode, payload.brand, payload.model, payload.category_id,
+                    payload.serial_number, payload.ip_address, payload.mac_address, payload.status,
+                    payload.physical_condition, payload.deployment_status, payload.created_at]
+            );
+
+            await SyncService.trackChange('INSERT', 'devices', payload);
+
+            // Log initialization
+            const logEntry = {
+                id: generateUUID(),
+                device_id: id,
+                type: 'Initialize',
+                status: 'Available',
+                hospital_id: hospitalId,
+                performed_at: now
+            };
+            await db.runAsync(
+                'INSERT INTO deployment_logs (id, device_id, type, status, hospital_id, performed_at) VALUES (?, ?, ?, ?, ?, ?)',
+                [logEntry.id, logEntry.device_id, logEntry.type, logEntry.status, logEntry.hospital_id, logEntry.performed_at]
+            );
+            await SyncService.trackChange('INSERT', 'deployment_logs', logEntry);
+
+            alert(`Device registered! Barcode: ${barcode}`);
+            navigation.goBack();
+        } catch (e: any) {
+            alert('Failed to save device: ' + e.message);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    if (loading) return <View style={styles.center}><ActivityIndicator color="#3b82f6" /></View>;
+
+    return (
+        <SafeAreaView style={styles.container}>
+            <ScrollView contentContainerStyle={styles.scrollContent}>
+                <View style={styles.infoCard}>
+                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#64748b', marginBottom: 16, textTransform: 'uppercase' }}>Basic Information</Text>
+
+                    <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Brand</Text>
+                    <TextInput
+                        style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
+                        placeholder="e.g. HP, Dell, Cisco"
+                        value={brand}
+                        onChangeText={setBrand}
+                    />
+
+                    <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Model</Text>
+                    <TextInput
+                        style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
+                        placeholder="e.g. ProBook 450 G8"
+                        value={model}
+                        onChangeText={setModel}
+                    />
+
+                    <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Serial Number (Optional)</Text>
+                    <TextInput
+                        style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
+                        placeholder="Device Serial Number"
+                        value={serialNumber}
+                        onChangeText={setSerialNumber}
+                    />
+
+                    <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Category</Text>
+                    <View style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, marginBottom: 16 }}>
+                        <ScrollView horizontal style={{ padding: 8 }}>
+                            {categories.map(c => (
+                                <TouchableOpacity
+                                    key={c.id}
+                                    onPress={() => setCategoryId(c.id)}
+                                    style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: categoryId === c.id ? '#3b82f6' : '#f1f5f9', borderRadius: 6, marginRight: 8 }}
+                                >
+                                    <Text style={{ color: categoryId === c.id ? '#fff' : '#64748b', fontSize: 12 }}>{c.name}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </View>
+                </View>
+
+                {userProfile?.role === 'SUPER_ADMIN' && (
+                    <View style={[styles.infoCard, { marginTop: 20 }]}>
+                        <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#64748b', marginBottom: 16, textTransform: 'uppercase' }}>Facility Assignment</Text>
+                        <View style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8 }}>
+                            <ScrollView horizontal style={{ padding: 8 }}>
+                                {hospitals.map(h => (
+                                    <TouchableOpacity
+                                        key={h.id}
+                                        onPress={() => setHospitalId(h.id)}
+                                        style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: hospitalId === h.id ? '#3b82f6' : '#f1f5f9', borderRadius: 6, marginRight: 8 }}
+                                    >
+                                        <Text style={{ color: hospitalId === h.id ? '#fff' : '#64748b', fontSize: 12 }}>{h.name}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
+                    </View>
+                )}
+
+                <View style={[styles.infoCard, { marginTop: 20 }]}>
+                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#64748b', marginBottom: 16, textTransform: 'uppercase' }}>Network Settings (Optional)</Text>
+
+                    <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>IP Address</Text>
+                    <TextInput
+                        style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
+                        placeholder="192.168.x.x"
+                        value={ipAddress}
+                        onChangeText={setIpAddress}
+                    />
+
+                    <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>MAC Address</Text>
+                    <TextInput
+                        style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16 }}
+                        placeholder="00:00:00:00:00:00"
+                        value={macAddress}
+                        onChangeText={setMacAddress}
+                    />
+                </View>
+
+                <TouchableOpacity
+                    style={[styles.scanActionCard, { marginTop: 32, backgroundColor: saving ? '#94a3b8' : '#3b82f6' }]}
+                    onPress={handleSave}
+                    disabled={saving}
+                >
+                    {saving ? <ActivityIndicator color="#fff" /> : <Save color="#fff" size={20} />}
+                    <Text style={[styles.cardTitleWhite, { marginLeft: 12 }]}>{saving ? 'Saving...' : 'Register Asset'}</Text>
+                </TouchableOpacity>
+            </ScrollView>
+        </SafeAreaView>
+    );
+}
+
+function DeskDetailsScreen({ route, navigation }: any) {
+    const { deskId } = route.params;
+    const [desk, setDesk] = useState<any>(null);
+    const [devices, setDevices] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    const fetchData = useCallback(async () => {
+        const db = await getDB();
+        const deskResult: any = await db.getFirstAsync(`
+            SELECT d.*, o.name as office_name, w.name as wing_name, h.name as hospital_name
+            FROM desks d
+            LEFT JOIN offices o ON d.office_id = o.id
+            LEFT JOIN wings w ON o.wing_id = w.id
+            LEFT JOIN hospitals h ON w.hospital_id = h.id
+            WHERE d.id = ?
+        `, [deskId]);
+
+        if (deskResult) {
+            setDesk(deskResult);
+            const deviceResults: any[] = await db.getAllAsync(`
+                SELECT d.*, c.name as category_name
+                FROM devices d
+                LEFT JOIN device_categories c ON d.category_id = c.id
+                WHERE d.desk_id = ?
+            `, [deskId]);
+            setDevices(deviceResults);
+        }
+        setLoading(false);
+    }, [deskId]);
+
+    useFocusEffect(
+        useCallback(() => {
+            fetchData();
+        }, [fetchData])
+    );
+
+    if (loading) return <View style={styles.center}><ActivityIndicator color="#3b82f6" /></View>;
+    if (!desk) return <View style={styles.center}><Text>Desk not found.</Text></View>;
+
+    return (
+        <SafeAreaView style={styles.container}>
+            <ScrollView contentContainerStyle={styles.scrollContent}>
+                <View style={styles.detailsHeader}>
+                    <Text style={styles.detailsTitle}>{desk.name}</Text>
+                    <Text style={styles.detailsSubTitle}>{desk.office_name} • {desk.wing_name}</Text>
+                    <Text style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>{desk.hospital_name}</Text>
+                </View>
+
+                {desk.assigned_to_user && (
+                    <View style={[styles.infoCard, { marginBottom: 20 }]}>
+                        <DetailItem label="Assigned To" value={desk.assigned_to_user} />
+                    </View>
+                )}
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <Text style={[styles.sectionTitle, { marginBottom: 0 }]}>Devices ({devices.length})</Text>
+                </View>
+
+                {devices.length === 0 ? (
+                    <View style={{ padding: 40, alignItems: 'center', backgroundColor: '#fff', borderRadius: 16, borderStyle: 'dashed', borderWidth: 1, borderColor: '#cbd5e1' }}>
+                        <Monitor color="#cbd5e1" size={48} />
+                        <Text style={{ marginTop: 12, color: '#64748b' }}>No devices at this desk.</Text>
+                    </View>
+                ) : (
+                    devices.map(device => (
+                        <TouchableOpacity
+                            key={device.id}
+                            style={styles.menuItem}
+                            onPress={() => navigation.navigate('DeviceDetails', { device })}
+                        >
+                            <View style={styles.menuItemLeft}>
+                                <View style={styles.iconCircleSmall}>
+                                    <Monitor color="#64748b" size={20} />
+                                </View>
+                                <View>
+                                    <Text style={styles.menuLabel}>{device.brand} {device.model}</Text>
+                                    <Text style={{ fontSize: 12, color: '#64748b' }}>{device.category_name} • {device.barcode}</Text>
+                                </View>
+                            </View>
+                            <StatusBadge status={device.status} />
+                        </TouchableOpacity>
+                    ))
+                )}
+            </ScrollView>
+        </SafeAreaView>
+    );
+}
+
+function AddEditDeskScreen({ route, navigation }: any) {
+    const { desk } = route.params || {};
+    const isEditing = !!desk;
+    const [name, setName] = useState(desk?.name || '');
+    const [assignedUser, setAssignedUser] = useState(desk?.assigned_to_user || '');
+    const [hospitalId, setHospitalId] = useState('');
+    const [wingId, setWingId] = useState('');
+    const [officeId, setOfficeId] = useState(desk?.office_id || '');
+
+    const [hospitals, setHospitals] = useState<any[]>([]);
+    const [wings, setWings] = useState<any[]>([]);
+    const [offices, setOffices] = useState<any[]>([]);
+    const [userProfile, setUserProfile] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchInitial = async () => {
+            const db = await getDB();
+
+            // Fetch Profile
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                const profile: any = await db.getFirstAsync('SELECT * FROM profiles WHERE id = ?', [user.id]);
+                setUserProfile(profile);
+
+                // If not SuperAdmin, lock to their hospital
+                if (profile && profile.role !== 'SUPER_ADMIN' && profile.hospital_id && !isEditing) {
+                    setHospitalId(profile.hospital_id);
+                    // Pre-fetch wings for this hospital
+                    const wData: any[] = await db.getAllAsync('SELECT * FROM wings WHERE hospital_id = ? ORDER BY name', [profile.hospital_id]);
+                    setWings(wData);
+                }
+            }
+
+            const hData: any[] = await db.getAllAsync('SELECT * FROM hospitals ORDER BY name');
+            setHospitals(hData);
+
+            if (isEditing) {
+                // Find ancestors for editing
+                const oData: any = await db.getFirstAsync('SELECT o.*, w.id as wing_id, w.hospital_id FROM offices o JOIN wings w ON o.wing_id = w.id WHERE o.id = ?', [desk.office_id]);
+                if (oData) {
+                    setHospitalId(oData.hospital_id);
+                    setWingId(oData.wing_id);
+                    // Fetch dependents
+                    const wData: any[] = await db.getAllAsync('SELECT * FROM wings WHERE hospital_id = ? ORDER BY name', [oData.hospital_id]);
+                    setWings(wData);
+                    const ofData: any[] = await db.getAllAsync('SELECT * FROM offices WHERE wing_id = ? ORDER BY name', [oData.wing_id]);
+                    setOffices(ofData);
+                }
+            }
+            setLoading(false);
+        };
+        fetchInitial();
+    }, [desk, isEditing]);
+
+    const handleHospitalSelect = async (hid: string) => {
+        setHospitalId(hid);
+        setWingId('');
+        setOfficeId('');
+        const db = await getDB();
+        const data: any[] = await db.getAllAsync('SELECT * FROM wings WHERE hospital_id = ? ORDER BY name', [hid]);
+        setWings(data);
+        setOffices([]);
+    };
+
+    const handleWingSelect = async (wid: string) => {
+        setWingId(wid);
+        setOfficeId('');
+        const db = await getDB();
+        const data: any[] = await db.getAllAsync('SELECT * FROM offices WHERE wing_id = ? ORDER BY name', [wid]);
+        setOffices(data);
+    };
+
+    const handleSave = async () => {
+        if (!name || !officeId) {
+            alert('Please fill in required fields');
+            return;
+        }
+
+        try {
+            const db = await getDB();
+            const now = new Date().toISOString();
+            if (isEditing) {
+                const payload = { id: desk.id, name, assigned_to_user: assignedUser, office_id: officeId };
+                await db.runAsync('UPDATE desks SET name = ?, assigned_to_user = ?, office_id = ? WHERE id = ?', [name, assignedUser, officeId, desk.id]);
+                await SyncService.trackChange('UPDATE', 'desks', payload);
+            } else {
+                const id = generateUUID();
+                const payload = { id, name, assigned_to_user: assignedUser, office_id: officeId, created_at: now };
+                await db.runAsync('INSERT INTO desks (id, name, assigned_to_user, office_id, created_at) VALUES (?, ?, ?, ?, ?)', [id, name, assignedUser, officeId, now]);
+                await SyncService.trackChange('INSERT', 'desks', payload);
+            }
+            alert(isEditing ? 'Desk updated' : 'Desk created');
+            navigation.goBack();
+        } catch (e: any) {
+            alert('Save failed: ' + e.message);
+        }
+    };
+
+    if (loading) return <View style={styles.center}><ActivityIndicator color="#3b82f6" /></View>;
+
+    return (
+        <SafeAreaView style={styles.container}>
+            <ScrollView contentContainerStyle={styles.scrollContent}>
+                <View style={styles.infoCard}>
+                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#64748b', marginBottom: 8, textTransform: 'uppercase' }}>Name & User</Text>
+                    <TextInput
+                        style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
+                        placeholder="Desk Name (e.g. Desk 01)"
+                        value={name}
+                        onChangeText={setName}
+                    />
+                    <TextInput
+                        style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16 }}
+                        placeholder="Assigned To (User Name)"
+                        value={assignedUser}
+                        onChangeText={setAssignedUser}
+                    />
+                </View>
+
+                <View style={[styles.infoCard, { marginTop: 20 }]}>
+                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#64748b', marginBottom: 16, textTransform: 'uppercase' }}>Hierarchy Placement</Text>
+
+                    {!isEditing && userProfile?.role === 'SUPER_ADMIN' && (
+                        <>
+                            <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Facility</Text>
+                            <View style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, marginBottom: 16 }}>
+                                <ScrollView horizontal style={{ padding: 8 }}>
+                                    {hospitals.map(h => (
+                                        <TouchableOpacity
+                                            key={h.id}
+                                            onPress={() => handleHospitalSelect(h.id)}
+                                            style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: hospitalId === h.id ? '#3b82f6' : '#f1f5f9', borderRadius: 6, marginRight: 8 }}
+                                        >
+                                            <Text style={{ color: hospitalId === h.id ? '#fff' : '#64748b', fontSize: 12 }}>{h.name}</Text>
+                                        </TouchableOpacity>
+                                    ))}
+                                </ScrollView>
+                            </View>
+                        </>
+                    )}
+
+                    <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Section</Text>
+                    <View style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, marginBottom: 16, opacity: !hospitalId ? 0.5 : 1 }}>
+                        <ScrollView horizontal style={{ padding: 8 }}>
+                            {wings.map(w => (
+                                <TouchableOpacity
+                                    key={w.id}
+                                    disabled={!hospitalId}
+                                    onPress={() => handleWingSelect(w.id)}
+                                    style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: wingId === w.id ? '#10b981' : '#f1f5f9', borderRadius: 6, marginRight: 8 }}
+                                >
+                                    <Text style={{ color: wingId === w.id ? '#fff' : '#64748b', fontSize: 12 }}>{w.name}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </View>
+
+                    <Text style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>Office</Text>
+                    <View style={{ borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, opacity: !wingId ? 0.5 : 1 }}>
+                        <ScrollView horizontal style={{ padding: 8 }}>
+                            {offices.map(o => (
+                                <TouchableOpacity
+                                    key={o.id}
+                                    disabled={!wingId}
+                                    onPress={() => setOfficeId(o.id)}
+                                    style={{ paddingHorizontal: 12, paddingVertical: 6, backgroundColor: officeId === o.id ? '#f59e0b' : '#f1f5f9', borderRadius: 6, marginRight: 8 }}
+                                >
+                                    <Text style={{ color: officeId === o.id ? '#fff' : '#64748b', fontSize: 12 }}>{o.name}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </View>
+                </View>
+
+                <TouchableOpacity
+                    style={[styles.scanActionCard, { marginTop: 32 }]}
+                    onPress={handleSave}
+                >
+                    <Save color="#fff" size={20} />
+                    <Text style={[styles.cardTitleWhite, { marginLeft: 12 }]}>{isEditing ? 'Update Desk' : 'Create Desk'}</Text>
+                </TouchableOpacity>
             </ScrollView>
         </SafeAreaView>
     );
@@ -1213,6 +1898,8 @@ function DeployAssetScreen({ route, navigation }: any) {
 
     const [requests, setRequests] = useState<any[]>([]);
     const [selectedRequest, setSelectedRequest] = useState('');
+    const [requestItems, setRequestItems] = useState<any[]>([]);
+    const [selectedItem, setSelectedItem] = useState('');
 
     useEffect(() => {
         const fetchData = async () => {
@@ -1220,8 +1907,8 @@ function DeployAssetScreen({ route, navigation }: any) {
             const wingList: any[] = await db.getAllAsync('SELECT * FROM wings WHERE hospital_id = ? ORDER BY name', [device.hospital_id]);
             setWings(wingList);
 
-            // Fetch open requests
-            const requestList: any[] = await db.getAllAsync("SELECT * FROM requests WHERE status = 'Open' ORDER BY created_at ASC");
+            // Fetch open requests (Pending only)
+            const requestList: any[] = await db.getAllAsync("SELECT * FROM requests WHERE status = 'Pending' ORDER BY created_at ASC");
             setRequests(requestList);
 
             setLoading(false);
@@ -1244,6 +1931,18 @@ function DeployAssetScreen({ route, navigation }: any) {
         const db = await getDB();
         const deskList: any[] = await db.getAllAsync('SELECT * FROM desks WHERE office_id = ? ORDER BY name', [officeId]);
         setDesks(deskList);
+    };
+
+    const handleRequestSelect = async (reqId: string) => {
+        setSelectedRequest(reqId);
+        setSelectedItem('');
+        if (!reqId) {
+            setRequestItems([]);
+            return;
+        }
+        const db = await getDB();
+        const items: any[] = await db.getAllAsync("SELECT * FROM request_items WHERE request_id = ? AND status != 'Fulfilled'", [reqId]);
+        setRequestItems(items);
     };
 
     const handleDeploy = async () => {
@@ -1291,12 +1990,28 @@ function DeployAssetScreen({ route, navigation }: any) {
 
             await SyncService.trackChange('INSERT', 'deployment_logs', payload);
 
-            // Close the request if one was linked
-            if (selectedRequest) {
-                // First find the request ID (using a basic assumption here since we only stored the "Reason" or title in UI)
-                // A better UI would value=id, label=text. Let's assume selectedRequest is the ID.
-                await db.runAsync("UPDATE requests SET status = 'Completed', updated_at = ? WHERE id = ?", [now, selectedRequest]);
-                await SyncService.trackChange('UPDATE', 'requests', { id: selectedRequest, status: 'Completed' });
+            // Close/Update the request if one was linked
+            if (selectedRequest && selectedItem) {
+                const item = requestItems.find(i => i.id === selectedItem);
+                if (item) {
+                    const newFulfilled = (item.fulfilled_quantity || 0) + 1;
+                    const itemStatus = newFulfilled >= item.quantity ? 'Fulfilled' : 'Pending';
+
+                    await db.runAsync("UPDATE request_items SET fulfilled_quantity = ?, status = ? WHERE id = ?", [newFulfilled, itemStatus, item.id]);
+                    await SyncService.trackChange('UPDATE', 'request_items', { id: item.id, fulfilled_quantity: newFulfilled, status: itemStatus });
+
+                    // Update parent request status
+                    const siblings: any[] = await db.getAllAsync("SELECT id, status FROM request_items WHERE request_id = ?", [selectedRequest]);
+                    const allFulfilled = siblings.every(s => (s.id === item.id ? itemStatus : s.status) === 'Fulfilled');
+
+                    const parentStatus = allFulfilled ? 'Fulfilled' : 'Pending';
+                    await db.runAsync("UPDATE requests SET status = ? WHERE id = ?", [parentStatus, selectedRequest]);
+                    await SyncService.trackChange('UPDATE', 'requests', { id: selectedRequest, status: parentStatus });
+                }
+            } else if (selectedRequest && !selectedItem) {
+                // Fallback for legacy requests or if no item was selected but request was
+                await db.runAsync("UPDATE requests SET status = 'Fulfilled' WHERE id = ?", [selectedRequest]);
+                await SyncService.trackChange('UPDATE', 'requests', { id: selectedRequest, status: 'Fulfilled' });
             }
 
             alert('Asset deployed successfully!');
@@ -1320,7 +2035,7 @@ function DeployAssetScreen({ route, navigation }: any) {
                 {requests.length > 0 ? (
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginBottom: 24 }}>
                         <TouchableOpacity
-                            onPress={() => setSelectedRequest('')}
+                            onPress={() => handleRequestSelect('')}
                             style={[styles.choiceBtn, selectedRequest === '' && styles.choiceBtnActive]}
                         >
                             <Text style={[styles.choiceText, selectedRequest === '' && styles.choiceTextActive]}>None</Text>
@@ -1328,17 +2043,36 @@ function DeployAssetScreen({ route, navigation }: any) {
                         {requests.map(req => (
                             <TouchableOpacity
                                 key={req.id}
-                                onPress={() => setSelectedRequest(req.id)}
+                                onPress={() => handleRequestSelect(req.id)}
                                 style={[styles.choiceBtn, selectedRequest === req.id && styles.choiceBtnActive]}
                             >
                                 <Text style={[styles.choiceText, selectedRequest === req.id && styles.choiceTextActive]}>
-                                    {req.item_type} ({req.reporter_name})
+                                    {req.reporter_name}'s Request
                                 </Text>
                             </TouchableOpacity>
                         ))}
                     </ScrollView>
                 ) : (
                     <Text style={{ color: '#94a3b8', fontStyle: 'italic', marginBottom: 24 }}>No open requests available.</Text>
+                )}
+
+                {selectedRequest && requestItems.length > 0 && (
+                    <>
+                        <Text style={styles.inputLabel}>Select Item to Fulfill</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginBottom: 24 }}>
+                            {requestItems.map(item => (
+                                <TouchableOpacity
+                                    key={item.id}
+                                    onPress={() => setSelectedItem(item.id)}
+                                    style={[styles.choiceBtn, selectedItem === item.id && styles.choiceBtnActive]}
+                                >
+                                    <Text style={[styles.choiceText, selectedItem === item.id && styles.choiceTextActive]}>
+                                        {item.item_type} ({item.fulfilled_quantity || 0}/{item.quantity})
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </>
                 )}
 
                 <Text style={styles.inputLabel}>Select Wing</Text>
@@ -1502,39 +2236,83 @@ const Drawer = createDrawerNavigator();
 const Stack = createNativeStackNavigator();
 
 function NewRequestScreen({ navigation }: any) {
-    const [itemType, setItemType] = useState('Laptop');
-    const [quantity, setQuantity] = useState('1');
-    const [reason, setReason] = useState('');
+    const [reporterName, setReporterName] = useState('');
+    const [requestItems, setRequestItems] = useState([{ item_type: 'Laptop', quantity: '1' }]);
     const [submitting, setSubmitting] = useState(false);
 
+    useEffect(() => {
+        const setInitialReporter = async () => {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.user?.email) {
+                setReporterName(session.user.email.split('@')[0]);
+            }
+        };
+        setInitialReporter();
+    }, []);
+
+    const addItem = () => setRequestItems([...requestItems, { item_type: 'Laptop', quantity: '1' }]);
+
+    const removeItem = (index: number) => {
+        if (requestItems.length > 1) {
+            setRequestItems(requestItems.filter((_, i) => i !== index));
+        }
+    };
+
+    const updateItem = (index: number, field: string, value: any) => {
+        const newItems = [...requestItems];
+        newItems[index] = { ...newItems[index], [field]: value };
+        setRequestItems(newItems);
+    };
+
     const handleSubmit = async () => {
-        if (!reason) {
-            alert('Please provide a reason for the request');
+        if (!reporterName.trim()) {
+            alert('Please provide a reporter name');
             return;
         }
+
+        const invalid = requestItems.some(i => !i.item_type || parseInt(i.quantity) < 1);
+        if (invalid) {
+            alert('Please ensure all items have a valid type and quantity');
+            return;
+        }
+
         setSubmitting(true);
         try {
             const db = await getDB();
             const { data: { session } } = await supabase.auth.getSession();
             const now = new Date().toISOString();
+            const requestId = generateUUID();
 
             const newRequest = {
-                id: generateUUID(),
-                item_type: itemType,
-                quantity: parseInt(quantity) || 1,
-                reason,
-                status: 'Open',
-                urgency: 'Medium',
-                reporter_name: session?.user?.email?.split('@')[0] || 'Unknown',
+                id: requestId,
+                status: 'Pending',
+                reporter_name: reporterName,
                 created_at: now
             };
 
+            // Insert Request Header
             await db.runAsync(
-                'INSERT INTO requests (id, item_type, quantity, reason, status, urgency, reporter_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                [newRequest.id, newRequest.item_type, newRequest.quantity, newRequest.reason, newRequest.status, newRequest.urgency, newRequest.reporter_name, newRequest.created_at]
+                'INSERT INTO requests (id, status, reporter_name, created_at) VALUES (?, ?, ?, ?)',
+                [newRequest.id, newRequest.status, newRequest.reporter_name, newRequest.created_at]
             );
-
             await SyncService.trackChange('INSERT', 'requests', newRequest);
+
+            // Insert Request Items
+            for (const item of requestItems) {
+                const itemPayload = {
+                    id: generateUUID(),
+                    request_id: requestId,
+                    item_type: item.item_type,
+                    quantity: parseInt(item.quantity) || 1,
+                    status: 'Pending',
+                    created_at: now
+                };
+                await db.runAsync(
+                    'INSERT INTO request_items (id, request_id, item_type, quantity, status, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+                    [itemPayload.id, itemPayload.request_id, itemPayload.item_type, itemPayload.quantity, itemPayload.status, itemPayload.created_at]
+                );
+                await SyncService.trackChange('INSERT', 'request_items', itemPayload);
+            }
 
             alert('Request logged successfully');
             navigation.goBack();
@@ -1548,38 +2326,65 @@ function NewRequestScreen({ navigation }: any) {
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={{ padding: 24 }}>
-                <Text style={styles.sectionTitle}>New Hardware Request</Text>
+                <Text style={styles.sectionTitle}>Request New Hardware</Text>
+                <Text style={styles.subWelcome}>You can add multiple items to this request</Text>
 
-                <Text style={styles.inputLabel}>Item Type</Text>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
-                    {['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Printer', 'Other'].map(t => (
-                        <TouchableOpacity
-                            key={t}
-                            style={[styles.choiceBtn, itemType === t && styles.choiceBtnActive]}
-                            onPress={() => setItemType(t)}
-                        >
-                            <Text style={[styles.choiceText, itemType === t && styles.choiceTextActive]}>{t}</Text>
-                        </TouchableOpacity>
-                    ))}
+                <View style={{ marginTop: 24 }}>
+                    <Text style={styles.inputLabel}>Reporter / Staff Name</Text>
+                    <TextInput
+                        style={styles.input}
+                        placeholder="Who is requesting these items?"
+                        placeholderTextColor="#94a3b8"
+                        value={reporterName}
+                        onChangeText={setReporterName}
+                    />
                 </View>
 
-                <Text style={styles.inputLabel}>Quantity</Text>
-                <TextInput
-                    style={styles.input}
-                    value={quantity}
-                    onChangeText={setQuantity}
-                    keyboardType="numeric"
-                />
+                <View style={{ marginTop: 10 }}>
+                    {requestItems.map((item, index) => (
+                        <View key={index} style={[styles.infoCard, { marginBottom: 16, padding: 16, borderLeftWidth: 4, borderLeftColor: '#3b82f6' }]}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                <Text style={{ fontWeight: 'bold', color: '#0f172a' }}>Item #{index + 1}</Text>
+                                {requestItems.length > 1 && (
+                                    <TouchableOpacity onPress={() => removeItem(index)}>
+                                        <Trash2 color="#ef4444" size={20} />
+                                    </TouchableOpacity>
+                                )}
+                            </View>
 
-                <Text style={styles.inputLabel}>Reason / Justification</Text>
-                <TextInput
-                    style={[styles.input, { height: 100, textAlignVertical: 'top' }]}
-                    value={reason}
-                    onChangeText={setReason}
-                    multiline
-                    placeholder="Why is this item needed?"
-                    placeholderTextColor="#cbd5e1"
-                />
+                            <Text style={styles.inputLabel}>Item Type</Text>
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+                                {['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Printer', 'Other'].map(t => (
+                                    <TouchableOpacity
+                                        key={t}
+                                        style={[styles.choiceBtn, { paddingHorizontal: 10, paddingVertical: 6 }, item.item_type === t && styles.choiceBtnActive]}
+                                        onPress={() => updateItem(index, 'item_type', t)}
+                                    >
+                                        <Text style={[styles.choiceText, { fontSize: 12 }, item.item_type === t && styles.choiceTextActive]}>{t}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            <Text style={styles.inputLabel}>Quantity</Text>
+                            <TextInput
+                                style={[styles.input, { marginBottom: 0 }]}
+                                value={item.quantity}
+                                onChangeText={(v) => updateItem(index, 'quantity', v)}
+                                keyboardType="numeric"
+                            />
+                        </View>
+                    ))}
+
+                    <TouchableOpacity
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'center', marginBottom: 24 }}
+                        onPress={addItem}
+                    >
+                        <PlusCircle color="#3b82f6" size={20} />
+                        <Text style={{ color: '#3b82f6', fontWeight: 'bold' }}>Add Another Item</Text>
+                    </TouchableOpacity>
+                </View>
+
+                <View style={styles.divider} />
 
                 <TouchableOpacity
                     style={[styles.scanActionCard, { backgroundColor: submitting ? '#94a3b8' : '#3b82f6' }]}
@@ -1973,6 +2778,7 @@ function HomeStack() {
             <Stack.Screen name="Dashboard" component={HomeScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Scanner" component={ScannerScreen} options={{ title: 'Scan Barcode' }} />
             <Stack.Screen name="DeviceDetails" component={DeviceDetailsScreen} options={{ title: 'Asset Details' }} />
+            <Stack.Screen name="AddDevice" component={AddDeviceScreen} options={{ title: 'Register New Asset' }} />
             <Stack.Screen name="MaintenanceHistory" component={MaintenanceHistoryScreen} options={{ title: 'Maintenance History' }} />
             <Stack.Screen name="DeploymentHistory" component={DeploymentHistoryScreen} options={{ title: 'Deployment History' }} />
             <Stack.Screen name="LogMaintenance" component={LogMaintenanceScreen} options={{ title: 'Log Activity' }} />
@@ -1982,6 +2788,9 @@ function HomeStack() {
             <Stack.Screen name="NewComplaint" component={NewComplaintScreen} options={{ title: 'Log Complaint' }} />
             <Stack.Screen name="ComplaintDetails" component={ComplaintDetailsScreen} options={{ title: 'Complaint Details' }} />
             <Stack.Screen name="NewRequest" component={NewRequestScreen} options={{ title: 'Log Request' }} />
+            <Stack.Screen name="RequestDetails" component={RequestDetailsScreen} options={{ title: 'Request Information' }} />
+            <Stack.Screen name="DeskDetails" component={DeskDetailsScreen} options={{ title: 'Desk Information' }} />
+            <Stack.Screen name="AddEditDesk" component={AddEditDeskScreen} options={({ route }: any) => ({ title: route.params?.desk ? 'Edit Desk' : 'Add New Desk' })} />
         </Stack.Navigator>
 
     );
@@ -2077,55 +2886,57 @@ export default function App() {
     }
 
     return (
-        <NavigationContainer>
-            <Drawer.Navigator
-                id="RootDrawer"
-                drawerContent={(props) => <CustomDrawerContent {...props} />}
-                screenOptions={{
-                    headerTintColor: '#0f172a',
-                    drawerActiveTintColor: '#3b82f6',
-                    drawerInactiveTintColor: '#64748b',
-                    drawerLabelStyle: { fontWeight: '600' }
-                }}
-            >
-                <Drawer.Screen
-                    name="Overview"
-                    component={HomeStack}
-                    options={{ drawerIcon: ({ color, size }) => <LayoutDashboard color={color} size={size} /> }}
-                />
-                <Drawer.Screen
-                    name="Inventory"
-                    component={InventoryScreen}
-                    options={{ drawerIcon: ({ color, size }) => <Package color={color} size={size} /> }}
-                />
-                <Drawer.Screen
-                    name="Desks"
-                    component={DesksScreen}
-                    options={{ drawerIcon: ({ color, size }) => <Building color={color} size={size} /> }}
-                />
-                <Drawer.Screen
-                    name="Maintenance"
-                    component={MaintenanceScreen}
-                    options={{ drawerIcon: ({ color, size }) => <Hammer color={color} size={size} /> }}
-                />
-                <Drawer.Screen
-                    name="Complaints"
-                    component={ComplaintsScreen}
-                    options={{ drawerIcon: ({ color, size }) => <AlertTriangle color={color} size={size} /> }}
-                />
-                <Drawer.Screen
-                    name="Requests"
-                    component={RequestsScreen}
-                    options={{ drawerIcon: ({ color, size }) => <ClipboardList color={color} size={size} /> }}
-                />
-                <Drawer.Screen
-                    name="Notifications"
-                    component={NotificationsScreen}
-                    options={{ drawerIcon: ({ color, size }) => <Bell color={color} size={size} /> }}
-                />
-            </Drawer.Navigator>
-            <StatusBar barStyle="dark-content" />
-        </NavigationContainer>
+        <SafeAreaProvider>
+            <NavigationContainer>
+                <Drawer.Navigator
+                    id="RootDrawer"
+                    drawerContent={(props) => <CustomDrawerContent {...props} />}
+                    screenOptions={{
+                        headerTintColor: '#0f172a',
+                        drawerActiveTintColor: '#3b82f6',
+                        drawerInactiveTintColor: '#64748b',
+                        drawerLabelStyle: { fontWeight: '600' }
+                    }}
+                >
+                    <Drawer.Screen
+                        name="Overview"
+                        component={HomeStack}
+                        options={{ drawerIcon: ({ color, size }) => <LayoutDashboard color={color} size={size} /> }}
+                    />
+                    <Drawer.Screen
+                        name="Inventory"
+                        component={InventoryScreen}
+                        options={{ drawerIcon: ({ color, size }) => <Package color={color} size={size} /> }}
+                    />
+                    <Drawer.Screen
+                        name="Desks"
+                        component={DesksScreen}
+                        options={{ drawerIcon: ({ color, size }) => <Building color={color} size={size} /> }}
+                    />
+                    <Drawer.Screen
+                        name="Maintenance"
+                        component={MaintenanceScreen}
+                        options={{ drawerIcon: ({ color, size }) => <Hammer color={color} size={size} /> }}
+                    />
+                    <Drawer.Screen
+                        name="Complaints"
+                        component={ComplaintsScreen}
+                        options={{ drawerIcon: ({ color, size }) => <AlertTriangle color={color} size={size} /> }}
+                    />
+                    <Drawer.Screen
+                        name="Requests"
+                        component={RequestsScreen}
+                        options={{ drawerIcon: ({ color, size }) => <ClipboardList color={color} size={size} /> }}
+                    />
+                    <Drawer.Screen
+                        name="Notifications"
+                        component={NotificationsScreen}
+                        options={{ drawerIcon: ({ color, size }) => <Bell color={color} size={size} /> }}
+                    />
+                </Drawer.Navigator>
+                <StatusBar barStyle="dark-content" />
+            </NavigationContainer>
+        </SafeAreaProvider>
     );
 }
 

@@ -27,6 +27,7 @@ export const SyncService = {
             'deployment_logs',
             'complaints',
             'requests',
+            'request_items',
             'notifications',
             'profiles'
         ];
@@ -96,7 +97,7 @@ export const SyncService = {
 
         try {
             const db = await getDB();
-            const queue: any[] = await db.getAllAsync('SELECT * FROM sync_queue ORDER BY created_at ASC');
+            const queue: any[] = await db.getAllAsync('SELECT * FROM sync_queue ORDER BY id ASC');
 
             if (queue.length === 0) return;
 
@@ -111,7 +112,17 @@ export const SyncService = {
                     const payload = JSON.parse(item.payload);
                     let result;
 
-                    if (item.operation === 'INSERT') {
+                    if (item.table_name === 'notifications_all_read') {
+                        // Bulk update for notifications
+                        const { user_id } = payload;
+                        if (!user_id) throw new Error('user_id is required for notifications_all_read sync');
+
+                        result = await supabase
+                            .from('notifications')
+                            .update({ is_read: true })
+                            .eq('user_id', user_id)
+                            .eq('is_read', false);
+                    } else if (item.operation === 'INSERT') {
                         result = await supabase.from(item.table_name).insert([payload]);
                     } else if (item.operation === 'UPDATE') {
                         result = await supabase.from(item.table_name).update(payload).eq('id', payload.id);
@@ -132,6 +143,13 @@ export const SyncService = {
                         console.warn(`Item ${item.id} already exists on server (Duplicate Key), removing from queue.`);
                         await db.runAsync('DELETE FROM sync_queue WHERE id = ?', [item.id]);
                         continue; // Continue to next item
+                    }
+
+                    // Handle foreign key violation (missing parent)
+                    if (err.code === '23503') {
+                        console.error(`Item ${item.id} failed due to missing dependency (FK Violation). Removing from queue to prevent constant failure.`);
+                        await db.runAsync('DELETE FROM sync_queue WHERE id = ?', [item.id]);
+                        continue;
                     }
 
                     console.error(`Error pushing item ${item.id} (${item.operation} on ${item.table_name}):`, err.message || err);

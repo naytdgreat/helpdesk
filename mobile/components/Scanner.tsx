@@ -46,19 +46,33 @@ export default function Scanner({ onScan }: { onScan: (data: string) => void }) 
 
             {/* HUD / Overlay */}
             <View style={styles.overlay}>
-                <View style={styles.unfocusedContainer}></View>
-                <View style={styles.focusedContainer}>
-                    <View style={styles.cornerTopLeft} />
-                    <View style={styles.cornerTopRight} />
-                    <View style={styles.cornerBottomLeft} />
-                    <View style={styles.cornerBottomRight} />
+                {/* Top Mask */}
+                <View style={[styles.maskBase, { flex: 1, width: '100%' }]} />
+
+                <View style={{ flexDirection: 'row', height: scannerHeight }}>
+                    {/* Left Mask */}
+                    <View style={[styles.maskBase, { flex: 1 }]} />
+
+                    {/* Focused Area */}
+                    <View style={styles.focusedContainer}>
+                        <View style={styles.cornerTopLeft} />
+                        <View style={styles.cornerTopRight} />
+                        <View style={styles.cornerBottomLeft} />
+                        <View style={styles.cornerBottomRight} />
+                        <View style={styles.scanLine} />
+                    </View>
+
+                    {/* Right Mask */}
+                    <View style={[styles.maskBase, { flex: 1 }]} />
                 </View>
-                <View style={styles.unfocusedContainer}></View>
+
+                {/* Bottom Mask */}
+                <View style={[styles.maskBase, { flex: 1, width: '100%' }]} />
             </View>
 
             <View style={styles.bottomBar}>
                 <Text style={styles.instructionText}>
-                    Align barcode within the square to scan
+                    Align barcode within the rectangle to scan
                 </Text>
 
                 {scanned && (
@@ -76,7 +90,8 @@ export default function Scanner({ onScan }: { onScan: (data: string) => void }) 
 }
 
 const { width } = Dimensions.get('window');
-const scannerSize = width * 0.7;
+const scannerWidth = width * 0.85;
+const scannerHeight = width * 0.45;
 
 const styles = StyleSheet.create({
     container: {
@@ -93,19 +108,28 @@ const styles = StyleSheet.create({
     },
     overlay: {
         ...StyleSheet.absoluteFillObject,
-        justifyContent: 'center',
-        alignItems: 'center',
     },
-    unfocusedContainer: {
-        flex: 1,
-        width: '100%',
-        backgroundColor: 'rgba(0,0,0,0.5)',
+    maskBase: {
+        backgroundColor: 'rgba(0,0,0,0.6)',
     },
     focusedContainer: {
-        width: scannerSize,
-        height: scannerSize,
+        width: scannerWidth,
+        height: scannerHeight,
         borderWidth: 0,
         position: 'relative',
+    },
+    scanLine: {
+        position: 'absolute',
+        top: scannerHeight / 2,
+        left: 10,
+        right: 10,
+        height: 1,
+        backgroundColor: 'rgba(59, 130, 246, 0.5)',
+        shadowColor: '#3b82f6',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 1,
+        shadowRadius: 2,
+        elevation: 2
     },
     cornerTopLeft: { position: 'absolute', top: 0, left: 0, width: 40, height: 40, borderTopWidth: 4, borderLeftWidth: 4, borderColor: '#3b82f6', borderTopLeftRadius: 15 },
     cornerTopRight: { position: 'absolute', top: 0, right: 0, width: 40, height: 40, borderTopWidth: 4, borderRightWidth: 4, borderColor: '#3b82f6', borderTopRightRadius: 15 },

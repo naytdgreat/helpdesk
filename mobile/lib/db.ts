@@ -124,8 +124,15 @@ export const initDB = async (): Promise<SQLite.SQLiteDatabase> => {
                 `CREATE TABLE IF NOT EXISTS requests(
     id TEXT PRIMARY KEY,
     reporter_name TEXT,
+    status TEXT,
+    created_at TEXT
+)`,
+                `CREATE TABLE IF NOT EXISTS request_items(
+    id TEXT PRIMARY KEY,
+    request_id TEXT,
     item_type TEXT,
     quantity INTEGER,
+    fulfilled_quantity INTEGER DEFAULT 0,
     status TEXT,
     created_at TEXT
 )`,
@@ -154,7 +161,7 @@ export const initDB = async (): Promise<SQLite.SQLiteDatabase> => {
             ];
 
             for (const sql of tables) {
-                await database.execAsync(sql);
+                if (sql) await database.execAsync(sql);
             }
             console.log('[DB] Tables verified');
 
@@ -168,12 +175,12 @@ export const initDB = async (): Promise<SQLite.SQLiteDatabase> => {
 
             for (const [table, columns] of Object.entries(tablesToCheck)) {
                 try {
-                    const tableInfo: any[] = await database.getAllAsync(`PRAGMA table_info(${table})`);
+                    const tableInfo: any[] = await database.getAllAsync(`PRAGMA table_info("${table}")`);
                     const existingColumns = tableInfo.map(col => String(col.name).toLowerCase());
 
                     for (const col of columns) {
                         if (!existingColumns.includes(col.toLowerCase())) {
-                            await database.execAsync(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT`);
+                            await database.execAsync(`ALTER TABLE "${table}" ADD COLUMN ${col} TEXT`);
                             console.log(`[DB] Added column ${col} to ${table} `);
                         }
                     }

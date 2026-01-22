@@ -438,19 +438,17 @@ export default function Inventory() {
                     if (item.request_id) {
                         const { data: siblings } = await supabase
                             .from('request_items')
-                            .select('status')
+                            .select('id, status')
                             .eq('request_id', item.request_id);
 
                         const allFulfilled = siblings?.every(s =>
                             (s.id === item.id ? newStatus : s.status) === 'Fulfilled'
                         );
 
-                        if (allFulfilled) {
-                            await supabase
-                                .from('requests')
-                                .update({ status: 'Fulfilled' } as any)
-                                .eq('id', item.request_id);
-                        }
+                        await supabase
+                            .from('requests')
+                            .update({ status: allFulfilled ? 'Fulfilled' : 'Pending' } as any)
+                            .eq('id', item.request_id);
                     }
                 }
             }
@@ -526,6 +524,34 @@ export default function Inventory() {
             fetchData();
         } catch (error: any) {
             alert(`Archiving failed: ${error.message}`);
+        } finally {
+            setIsSubmitting(false);
+        }
+    }
+
+    async function handleRetrieveAsset(device: any) {
+        if (!device) return;
+        try {
+            setIsSubmitting(true);
+            const { error } = await (supabase.from('devices').update({
+                deployment_status: 'Available',
+                status: 'Good',
+                physical_condition: 'Good',
+                desk_id: null,
+                office_id: null
+            } as any).eq('id', device.id) as any);
+
+            if (error) throw error;
+
+            // Log history
+            await logDeployment(device.id, 'CheckIn', 'Available', {
+                hospital_id: device.hospital_id,
+                notes: 'Retrieved to main store.'
+            });
+            setOpenDropdownId(null);
+            fetchData();
+        } catch (error: any) {
+            alert(`Retrieval failed: ${error.message}`);
         } finally {
             setIsSubmitting(false);
         }
@@ -845,6 +871,17 @@ export default function Inventory() {
                                                                     >
                                                                         <Send size={16} className="text-emerald-500" />
                                                                         <span>Deploy Asset</span>
+                                                                    </button>
+                                                                )}
+
+                                                                {/* Retrieve Asset Action */}
+                                                                {(device.deployment_status === 'Deployed' || device.deployment_status === 'Archived') && (
+                                                                    <button
+                                                                        onClick={() => handleRetrieveAsset(device)}
+                                                                        className="w-full px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-3 transition-colors"
+                                                                    >
+                                                                        <RotateCcw size={16} className="text-purple-500" />
+                                                                        <span>Retrieve Asset</span>
                                                                     </button>
                                                                 )}
 

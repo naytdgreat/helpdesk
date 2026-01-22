@@ -68,7 +68,29 @@ export default function RequestsPage() {
                 .order('created_at', { ascending: false });
 
             if (error) throw error;
-            setRequests(data || []);
+
+            // Integrity Check: Auto-fix requests that should be 'Fulfilled'
+            const pendingToFix = (data || []).filter(r =>
+                r.status === 'Pending' &&
+                r.request_items?.length > 0 &&
+                r.request_items.every((i: any) => i.status === 'Fulfilled')
+            );
+
+            if (pendingToFix.length > 0) {
+                console.log(`[Integrity] Fixing ${pendingToFix.length} anomalous requests`);
+                await Promise.all(pendingToFix.map(r =>
+                    supabase.from('requests').update({ status: 'Fulfilled' } as any).eq('id', r.id)
+                ));
+                // Refetch to show clean data
+                const { data: cleanData } = await supabase
+                    .from('requests')
+                    .select('*, request_items(*)')
+                    .range(from, to)
+                    .order('created_at', { ascending: false });
+                setRequests(cleanData || []);
+            } else {
+                setRequests(data || []);
+            }
         } catch (error) {
             console.error('Error fetching requests:', error);
         } finally {
