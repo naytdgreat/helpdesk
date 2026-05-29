@@ -16,6 +16,7 @@ import {
     Pencil
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { createClient } from '@supabase/supabase-js';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
@@ -94,13 +95,23 @@ export default function UserManagementPage() {
         setSuccessMessage(null);
 
         try {
-            // Note: signUp will create user in auth.users and trigger handle_new_user
-            // which now uses metadata.
-            const { data, error: signUpError } = await supabase.auth.signUp({
+            // Note: We create a temporary, non-persisting client for the signUp call.
+            // This prevents the current admin's browser session from being logged out or switched.
+            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://lhhexzchqaanraydnmgh.supabase.co';
+            const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_DD40Ypi1G-f9kCerDogpVg_xZVjfT4v';
+            const tempClient = createClient(supabaseUrl, supabaseAnonKey, {
+                auth: {
+                    persistSession: false
+                }
+            });
+
+            // signUp will create user in auth.users and trigger handle_new_user
+            const { data, error: signUpError } = await tempClient.auth.signUp({
                 email: formData.email,
                 password: formData.password,
                 options: {
                     data: {
+                        name: formData.name,
                         role: formData.role,
                         hospital_id: formData.hospital_id || null
                     } as any
@@ -111,11 +122,11 @@ export default function UserManagementPage() {
 
             // Direct update to Profile as a fallback/backup to ensure data is correct
             if (data.user) {
-                await supabase
-                    .from('profiles')
+                await (supabase
+                    .from('profiles') as any)
                     .update({
                         name: formData.name,
-                        role: formData.role,
+                        role: formData.role as any,
                         hospital_id: formData.hospital_id || null
                     })
                     .eq('id', data.user.id);
@@ -149,8 +160,8 @@ export default function UserManagementPage() {
         setIsSubmitting(true);
 
         try {
-            const { error } = await supabase
-                .from('profiles')
+            const { error } = await (supabase
+                .from('profiles') as any)
                 .update({
                     name: editingUser.name,
                     role: editingUser.role,

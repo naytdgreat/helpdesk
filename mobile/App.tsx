@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ScrollView, StatusBar, TextInput, ActivityIndicator, Modal, Alert } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, ScrollView, StatusBar, TextInput, ActivityIndicator, Modal, Alert, Switch } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationContainer, useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -47,6 +47,7 @@ import { supabase } from './lib/supabase';
 import { initDB, getDB } from './lib/db';
 import { SyncService } from './lib/sync';
 import Scanner from './components/Scanner';
+import * as LocalAuthentication from 'expo-local-authentication';
 
 const generateBarcode = () => {
     const prefix = 'ICT';
@@ -57,6 +58,26 @@ const generateBarcode = () => {
 };
 
 // --- Auth Component ---
+
+const handleBiometricAuth = async (promptMessage = 'Authenticate to access Helpdesk Offline') => {
+    try {
+        const hasHardware = await LocalAuthentication.hasHardwareAsync();
+        if (!hasHardware) return false;
+
+        const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+        if (!isEnrolled) return false;
+
+        const result = await LocalAuthentication.authenticateAsync({
+            promptMessage,
+            fallbackLabel: 'Use PIN',
+        });
+
+        return result.success;
+    } catch (e) {
+        console.error('Biometric auth error:', e);
+        return false;
+    }
+};
 
 function LoginScreen({ onLogin }: any) {
     const [email, setEmail] = useState('');
@@ -73,10 +94,36 @@ function LoginScreen({ onLogin }: any) {
             console.log(`[AUTH] Attempting login for ${email} at ${new Date().toISOString()}`);
             const { data, error } = await supabase.auth.signInWithPassword({ email, password });
             if (error) {
+                // Check if it's a network error
+                if (error.message === 'Network request failed' || error.status === 0 || !error.status) {
+                    console.log('[AUTH] Network error detected, attempting offline login');
+                    const db = await getDB();
+                    const localUser: any = await db.getFirstAsync('SELECT * FROM profiles WHERE email = ?', [email.toLowerCase()]);
+
+                    if (localUser && localUser.offline_login_enabled === 1) {
+                        const biometrySuccess = await handleBiometricAuth('Authenticate to access Helpdesk Offline');
+                        if (biometrySuccess) {
+                            console.log('[AUTH] Offline biometric auth successful');
+                            onLogin({ user: { id: localUser.id, email: localUser.email }, offline: true });
+                            return;
+                        } else {
+                            throw new Error('Biometric authentication failed or cancelled.');
+                        }
+                    } else if (localUser) {
+                        throw new Error('Offline login is not enabled for this account. Please login online first and enable it in Settings.');
+                    } else {
+                        throw new Error('No local profile found for this email. Please login online first.');
+                    }
+                }
                 console.error('[AUTH] Supabase error:', error);
                 throw error;
             }
-            console.log('[AUTH] Login successful');
+
+            console.log('[AUTH] Online login successful');
+            // Save email locally for future offline login
+            const db = await getDB();
+            await db.runAsync('UPDATE profiles SET email = ? WHERE id = ?', [email.toLowerCase(), data.session?.user.id]);
+
             onLogin(data.session);
         } catch (error: any) {
             console.error('[AUTH] Catch block error:', error);
@@ -104,7 +151,7 @@ function LoginScreen({ onLogin }: any) {
     return (
         <SafeAreaView style={[styles.container, { justifyContent: 'center', padding: 24 }]}>
             <View style={{ alignItems: 'center', marginBottom: 40 }}>
-                <View style={[styles.drawerLogo, { width: 80, height: 80, borderRadius: 20 }]}>
+                <View style={[styles.drawerLogo, { width: 80, height: 80, borderRadius: 20, backgroundColor: '#3b82f6' }]}>
                     <Shield color="#fff" size={48} />
                 </View>
                 <Text style={[styles.welcomeText, { marginTop: 16, fontSize: 28 }]}>Helpdesk</Text>
@@ -117,7 +164,7 @@ function LoginScreen({ onLogin }: any) {
                     <TextInput
                         style={{ flex: 1, height: 40, fontSize: 16, color: '#0f172a' }}
                         placeholder="Email Address"
-                        placeholderTextColor="#94a3b8"
+                        placeholderTextColor="#64748b"
                         value={email}
                         onChangeText={setEmail}
                         autoCapitalize="none"
@@ -129,7 +176,7 @@ function LoginScreen({ onLogin }: any) {
                     <TextInput
                         style={{ flex: 1, height: 40, fontSize: 16, color: '#0f172a' }}
                         placeholder="Password"
-                        placeholderTextColor="#94a3b8"
+                        placeholderTextColor="#64748b"
                         value={password}
                         onChangeText={setPassword}
                         secureTextEntry
@@ -158,13 +205,18 @@ function LoginScreen({ onLogin }: any) {
             >
                 <Text style={{ color: '#64748b', textAlign: 'center', fontSize: 12 }}>Trouble connecting? Test Connectivity</Text>
             </TouchableOpacity>
+
+            <View style={{ marginTop: 'auto', paddingVertical: 20, alignItems: 'center' }}>
+                <Text style={{ color: '#94a3b8', fontSize: 14, fontWeight: 'bold' }}>helpdesk v1.1.0</Text>
+                <Text style={{ color: '#cbd5e1', fontSize: 12, marginTop: 4 }}>Centralized Asset & Support Management System</Text>
+            </View>
         </SafeAreaView>
     );
 }
 
 // --- App Navigation & Logic ---
 
-function InventoryScreen({ navigation }: any) {
+function InventoryScreen({ navigation, userRole }: any) {
     const [devices, setDevices] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -252,7 +304,7 @@ function InventoryScreen({ navigation }: any) {
     );
 }
 
-function DesksScreen({ navigation }: any) {
+function DesksScreen({ navigation, userRole }: any) {
     const [desks, setDesks] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -318,27 +370,29 @@ function DesksScreen({ navigation }: any) {
                                 }}>
                                     <Pencil color="#64748b" size={18} />
                                 </TouchableOpacity>
-                                <TouchableOpacity onPress={(e) => {
-                                    e.stopPropagation();
-                                    Alert.alert(
-                                        'Delete Desk',
-                                        'Are you sure? This will unassign any devices from this desk.',
-                                        [
-                                            { text: 'Cancel', style: 'cancel' },
-                                            {
-                                                text: 'Delete', style: 'destructive', onPress: async () => {
-                                                    const db = await getDB();
-                                                    await db.runAsync('UPDATE devices SET desk_id = NULL, office_id = NULL, deployment_status = "Available" WHERE desk_id = ?', [desk.id]);
-                                                    await db.runAsync('DELETE FROM desks WHERE id = ?', [desk.id]);
-                                                    await SyncService.trackChange('DELETE', 'desks', { id: desk.id });
-                                                    fetchItems();
+                                {(userRole === 'ADMIN' || userRole === 'SUPER_ADMIN') && (
+                                    <TouchableOpacity onPress={(e) => {
+                                        e.stopPropagation();
+                                        Alert.alert(
+                                            'Delete Desk',
+                                            'Are you sure? This will unassign any devices from this desk.',
+                                            [
+                                                { text: 'Cancel', style: 'cancel' },
+                                                {
+                                                    text: 'Delete', style: 'destructive', onPress: async () => {
+                                                        const db = await getDB();
+                                                        await db.runAsync('UPDATE devices SET desk_id = NULL, office_id = NULL, deployment_status = "Available" WHERE desk_id = ?', [desk.id]);
+                                                        await db.runAsync('DELETE FROM desks WHERE id = ?', [desk.id]);
+                                                        await SyncService.trackChange('DELETE', 'desks', { id: desk.id });
+                                                        fetchItems();
+                                                    }
                                                 }
-                                            }
-                                        ]
-                                    );
-                                }}>
-                                    <Trash2 color="#ef4444" size={18} />
-                                </TouchableOpacity>
+                                            ]
+                                        );
+                                    }}>
+                                        <Trash2 color="#ef4444" size={18} />
+                                    </TouchableOpacity>
+                                )}
                                 <ChevronRight color="#cbd5e1" size={20} />
                             </View>
                         </TouchableOpacity>
@@ -431,7 +485,7 @@ const StatusBadge = ({ status }: { status: string }) => {
     );
 };
 
-function ComplaintsScreen({ navigation }: any) {
+function ComplaintsScreen({ navigation, userRole }: any) {
     const [complaints, setComplaints] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -723,10 +777,11 @@ function NotificationsScreen() {
     );
 }
 
-function SettingsScreen() {
+function SettingsScreen({ userRole }: any) {
     const [syncing, setSyncing] = useState(false);
     const [lastSync, setLastSync] = useState<string | null>(null);
     const [queueCount, setQueueCount] = useState(0);
+    const [offlineEnabled, setOfflineEnabled] = useState(false);
 
     const fetchQueue = async () => {
         const db = await getDB();
@@ -738,6 +793,31 @@ function SettingsScreen() {
         const db = await getDB();
         const meta: any = await db.getFirstAsync("SELECT last_pulled_at FROM sync_metadata WHERE table_name = 'hospitals'");
         if (meta) setLastSync(new Date(meta.last_pulled_at).toLocaleString());
+
+        // Fetch offline login status
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+            const profile: any = await db.getFirstAsync('SELECT offline_login_enabled FROM profiles WHERE id = ?', [user.id]);
+            setOfflineEnabled(profile?.offline_login_enabled === 1);
+        }
+    };
+
+    const toggleOfflineLogin = async (value: boolean) => {
+        setOfflineEnabled(value);
+        try {
+            const db = await getDB();
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                await db.runAsync('UPDATE profiles SET offline_login_enabled = ? WHERE id = ?', [value ? 1 : 0, user.id]);
+                // Also ensure email is saved if not already
+                await db.runAsync('UPDATE profiles SET email = ? WHERE id = ? AND email IS NULL', [user.email?.toLowerCase(), user.id]);
+
+                alert(value ? 'Offline Biometric Login Enabled' : 'Offline Login Disabled');
+            }
+        } catch (e: any) {
+            alert('Error updating setting: ' + e.message);
+            setOfflineEnabled(!value);
+        }
     };
 
     useEffect(() => {
@@ -776,7 +856,25 @@ function SettingsScreen() {
                     <MenuLink icon={Network} label="Network Status" count="Auto-Sync Enabled" />
                 </View>
 
-                <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Synchronization</Text>
+                <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Security</Text>
+                <View style={styles.infoCard}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <View style={{ flex: 1, marginRight: 16 }}>
+                            <Text style={styles.menuLabel}>Offline Biometric Login</Text>
+                            <Text style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                                Allow access via Fingerprint/PIN when no internet is available. Requires initial online login.
+                            </Text>
+                        </View>
+                        <Switch
+                            value={offlineEnabled}
+                            onValueChange={toggleOfflineLogin}
+                            trackColor={{ false: '#cbd5e1', true: '#3b82f6' }}
+                            thumbColor={offlineEnabled ? '#fff' : '#f4f3f4'}
+                        />
+                    </View>
+                </View>
+
+                <Text style={[styles.sectionTitle, { marginTop: 8 }]}>Synchronization</Text>
                 <View style={[styles.infoCard, { marginBottom: 16 }]}>
                     <DetailItem label="Last Sync" value={lastSync || 'Never'} />
                     <View style={styles.divider} />
@@ -983,7 +1081,7 @@ function ScannerScreen({ navigation }: any) {
     );
 }
 
-function DeviceDetailsScreen({ route, navigation }: any) {
+function DeviceDetailsScreen({ route, navigation, userRole }: any) {
     const { barcode, device: paramDevice } = route.params || {};
     // Prioritize barcode from scanner, otherwise use device.barcode from Inventory
     const searchBarcode = barcode || paramDevice?.barcode;
@@ -1037,7 +1135,7 @@ function DeviceDetailsScreen({ route, navigation }: any) {
                 <View style={styles.detailsHeader}>
                     <StatusBadge status={device.status} />
                     <Text style={styles.detailsTitle}>{device.brand} {device.model}</Text>
-                    <Text style={styles.detailsSubTitle}>{device.category_name} • Tag: {barcode}</Text>
+                    <Text style={styles.detailsSubTitle}>{device.category_name}</Text>
                 </View>
 
                 <View style={styles.infoCard}>
@@ -1069,7 +1167,7 @@ function DeviceDetailsScreen({ route, navigation }: any) {
                         />
                     )}
                     <ActionButton
-                        label="Status History"
+                        label="Maintenance History"
                         color="#6366f1"
                         onPress={() => navigation.navigate('MaintenanceHistory', { deviceId: device.id })}
                     />
@@ -1161,17 +1259,19 @@ function DeviceDetailsScreen({ route, navigation }: any) {
                         color="#64748b"
                         onPress={() => navigation.navigate('EditDevice', { device })}
                     />
-                    <ActionButton
-                        label="Delete Asset"
-                        color="#ef4444"
-                        onPress={async () => {
-                            const db = await getDB();
-                            await db.runAsync('DELETE FROM devices WHERE id = ?', [device.id]);
-                            await SyncService.trackChange('DELETE', 'devices', { id: device.id });
-                            alert('Asset deleted.');
-                            navigation.goBack();
-                        }}
-                    />
+                    {(userRole === 'ADMIN' || userRole === 'SUPER_ADMIN') && (
+                        <ActionButton
+                            label="Delete Asset"
+                            color="#ef4444"
+                            onPress={async () => {
+                                const db = await getDB();
+                                await db.runAsync('DELETE FROM devices WHERE id = ?', [device.id]);
+                                await SyncService.trackChange('DELETE', 'devices', { id: device.id });
+                                alert('Asset deleted.');
+                                navigation.goBack();
+                            }}
+                        />
+                    )}
                 </View>
             </ScrollView>
         </SafeAreaView>
@@ -1340,7 +1440,7 @@ function AddDeviceScreen({ navigation }: any) {
                     <TextInput
                         style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
                         placeholder="e.g. HP, Dell, Cisco"
-                        value={brand}
+                        placeholderTextColor="#64748b"
                         onChangeText={setBrand}
                     />
 
@@ -1348,7 +1448,7 @@ function AddDeviceScreen({ navigation }: any) {
                     <TextInput
                         style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
                         placeholder="e.g. ProBook 450 G8"
-                        value={model}
+                        placeholderTextColor="#64748b"
                         onChangeText={setModel}
                     />
 
@@ -1356,7 +1456,7 @@ function AddDeviceScreen({ navigation }: any) {
                     <TextInput
                         style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
                         placeholder="Device Serial Number"
-                        value={serialNumber}
+                        placeholderTextColor="#64748b"
                         onChangeText={setSerialNumber}
                     />
 
@@ -1402,7 +1502,7 @@ function AddDeviceScreen({ navigation }: any) {
                     <TextInput
                         style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
                         placeholder="192.168.x.x"
-                        value={ipAddress}
+                        placeholderTextColor="#64748b"
                         onChangeText={setIpAddress}
                     />
 
@@ -1410,7 +1510,7 @@ function AddDeviceScreen({ navigation }: any) {
                     <TextInput
                         style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16 }}
                         placeholder="00:00:00:00:00:00"
-                        value={macAddress}
+                        placeholderTextColor="#64748b"
                         onChangeText={setMacAddress}
                     />
                 </View>
@@ -1498,13 +1598,13 @@ function DeskDetailsScreen({ route, navigation }: any) {
                             style={styles.menuItem}
                             onPress={() => navigation.navigate('DeviceDetails', { device })}
                         >
-                            <View style={styles.menuItemLeft}>
+                            <View style={[styles.menuItemLeft, { flex: 1, paddingRight: 8 }]}>
                                 <View style={styles.iconCircleSmall}>
                                     <Monitor color="#64748b" size={20} />
                                 </View>
-                                <View>
-                                    <Text style={styles.menuLabel}>{device.brand} {device.model}</Text>
-                                    <Text style={{ fontSize: 12, color: '#64748b' }}>{device.category_name} • {device.barcode}</Text>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.menuLabel} numberOfLines={1} ellipsizeMode="tail">{device.brand} {device.model}</Text>
+                                    <Text style={{ fontSize: 12, color: '#64748b' }} numberOfLines={1} ellipsizeMode="tail">{device.category_name} • {device.barcode}</Text>
                                 </View>
                             </View>
                             <StatusBadge status={device.status} />
@@ -1625,13 +1725,13 @@ function AddEditDeskScreen({ route, navigation }: any) {
                     <TextInput
                         style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16, marginBottom: 16 }}
                         placeholder="Desk Name (e.g. Desk 01)"
-                        value={name}
+                        placeholderTextColor="#64748b"
                         onChangeText={setName}
                     />
                     <TextInput
                         style={{ borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 8, fontSize: 16 }}
                         placeholder="Assigned To (User Name)"
-                        value={assignedUser}
+                        placeholderTextColor="#64748b"
                         onChangeText={setAssignedUser}
                     />
                 </View>
@@ -1835,6 +1935,7 @@ function LogMaintenanceScreen({ route, navigation }: any) {
 
                 <TextInput
                     placeholder="Performer Name (e.g. John Doe)"
+                    placeholderTextColor="#64748b"
                     style={styles.input}
                     value={performerName}
                     onChangeText={setPerformerName}
@@ -1842,6 +1943,7 @@ function LogMaintenanceScreen({ route, navigation }: any) {
 
                 <TextInput
                     placeholder="What work was performed? (required)"
+                    placeholderTextColor="#64748b"
                     style={[styles.input, { height: 100, textAlignVertical: 'top' }]}
                     multiline
                     value={description}
@@ -1850,6 +1952,7 @@ function LogMaintenanceScreen({ route, navigation }: any) {
 
                 <TextInput
                     placeholder="Parts Replaced (Optional)"
+                    placeholderTextColor="#64748b"
                     style={styles.input}
                     value={partsReplaced}
                     onChangeText={setPartsReplaced}
@@ -2124,6 +2227,7 @@ function DeployAssetScreen({ route, navigation }: any) {
 
                 <TextInput
                     placeholder="Deployment Notes (Optional)"
+                    placeholderTextColor="#64748b"
                     style={[styles.input, { height: 80, textAlignVertical: 'top', marginTop: 16 }]}
                     multiline
                     value={notes}
@@ -2333,8 +2437,8 @@ function NewRequestScreen({ navigation }: any) {
                     <Text style={styles.inputLabel}>Reporter / Staff Name</Text>
                     <TextInput
                         style={styles.input}
-                        placeholder="Who is requesting these items?"
-                        placeholderTextColor="#94a3b8"
+                        placeholder="Reporter Name"
+                        placeholderTextColor="#64748b"
                         value={reporterName}
                         onChangeText={setReporterName}
                     />
@@ -2401,7 +2505,7 @@ function NewRequestScreen({ navigation }: any) {
 }
 
 
-function NewComplaintScreen({ navigation }: any) {
+function NewComplaintScreen({ navigation, userRole }: any) {
     const [reporterName, setReporterName] = useState('');
     const [description, setDescription] = useState('');
     const [category, setCategory] = useState('Hardware');
@@ -2513,7 +2617,7 @@ function NewComplaintScreen({ navigation }: any) {
                     value={reporterName}
                     onChangeText={setReporterName}
                     placeholder="e.g. Staff Name"
-                    placeholderTextColor="#cbd5e1"
+                    placeholderTextColor="#64748b"
                 />
 
                 <Text style={styles.inputLabel}>Category</Text>
@@ -2536,7 +2640,7 @@ function NewComplaintScreen({ navigation }: any) {
                     onChangeText={setDescription}
                     multiline
                     placeholder="Describe the problem in detail..."
-                    placeholderTextColor="#cbd5e1"
+                    placeholderTextColor="#64748b"
                 />
 
                 <View style={[styles.infoCard, { marginBottom: 24 }]}>
@@ -2593,7 +2697,7 @@ function NewComplaintScreen({ navigation }: any) {
     );
 }
 
-function ComplaintDetailsScreen({ route, navigation }: any) {
+function ComplaintDetailsScreen({ route, navigation, userRole }: any) {
     const { complaint: paramComplaint } = route.params;
     const [complaint, setComplaint] = useState(paramComplaint);
     const [linkedDevice, setLinkedDevice] = useState<any>(null);
@@ -2760,7 +2864,13 @@ function ComplaintDetailsScreen({ route, navigation }: any) {
 
                     <TouchableOpacity
                         style={{ flex: 1, backgroundColor: '#ef4444', padding: 16, borderRadius: 12, alignItems: 'center' }}
-                        onPress={handleDelete}
+                        onPress={() => {
+                            if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
+                                alert('Permission Denied: Only Admins can delete complaints.');
+                                return;
+                            }
+                            handleDelete();
+                        }}
                     >
                         <Text style={{ color: '#fff', fontWeight: 'bold' }}>Delete Complaint</Text>
                     </TouchableOpacity>
@@ -2772,27 +2882,40 @@ function ComplaintDetailsScreen({ route, navigation }: any) {
     );
 }
 
-function HomeStack() {
+function HomeStack({ userRole }: any) {
     return (
         <Stack.Navigator id="HomeStack" screenOptions={{ headerShown: true }}>
-            <Stack.Screen name="Dashboard" component={HomeScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="Dashboard" options={{ headerShown: false }}>
+                {(props) => <HomeScreen {...props} userRole={userRole} />}
+            </Stack.Screen>
             <Stack.Screen name="Scanner" component={ScannerScreen} options={{ title: 'Scan Barcode' }} />
-            <Stack.Screen name="DeviceDetails" component={DeviceDetailsScreen} options={{ title: 'Asset Details' }} />
-            <Stack.Screen name="AddDevice" component={AddDeviceScreen} options={{ title: 'Register New Asset' }} />
+            <Stack.Screen name="DeviceDetails">
+                {(props) => <DeviceDetailsScreen {...props} userRole={userRole} />}
+            </Stack.Screen>
+            <Stack.Screen name="AddDevice">
+                {(props) => <AddDeviceScreen {...props} userRole={userRole} />}
+            </Stack.Screen>
             <Stack.Screen name="MaintenanceHistory" component={MaintenanceHistoryScreen} options={{ title: 'Maintenance History' }} />
             <Stack.Screen name="DeploymentHistory" component={DeploymentHistoryScreen} options={{ title: 'Deployment History' }} />
             <Stack.Screen name="LogMaintenance" component={LogMaintenanceScreen} options={{ title: 'Log Activity' }} />
             <Stack.Screen name="DeployAsset" component={DeployAssetScreen} options={{ title: 'Deploy Asset' }} />
             <Stack.Screen name="EditDevice" component={EditDeviceScreen} options={{ title: 'Edit Details' }} />
-            <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: 'Settings' }} />
-            <Stack.Screen name="NewComplaint" component={NewComplaintScreen} options={{ title: 'Log Complaint' }} />
-            <Stack.Screen name="ComplaintDetails" component={ComplaintDetailsScreen} options={{ title: 'Complaint Details' }} />
+            <Stack.Screen name="Settings">
+                {(props) => <SettingsScreen {...props} userRole={userRole} />}
+            </Stack.Screen>
+            <Stack.Screen name="NewComplaint">
+                {(props) => <NewComplaintScreen {...props} userRole={userRole} />}
+            </Stack.Screen>
+            <Stack.Screen name="ComplaintDetails">
+                {(props) => <ComplaintDetailsScreen {...props} userRole={userRole} />}
+            </Stack.Screen>
             <Stack.Screen name="NewRequest" component={NewRequestScreen} options={{ title: 'Log Request' }} />
             <Stack.Screen name="RequestDetails" component={RequestDetailsScreen} options={{ title: 'Request Information' }} />
             <Stack.Screen name="DeskDetails" component={DeskDetailsScreen} options={{ title: 'Desk Information' }} />
-            <Stack.Screen name="AddEditDesk" component={AddEditDeskScreen} options={({ route }: any) => ({ title: route.params?.desk ? 'Edit Desk' : 'Add New Desk' })} />
+            <Stack.Screen name="AddEditDesk">
+                {(props) => <AddEditDeskScreen {...props} userRole={userRole} />}
+            </Stack.Screen>
         </Stack.Navigator>
-
     );
 }
 
@@ -2830,8 +2953,27 @@ function CustomDrawerContent(props: any) {
 
 export default function App() {
     const [session, setSession] = useState<any>(null);
+    const [userRole, setUserRole] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [unreadNotifications, setUnreadNotifications] = useState(0);
+
+    const checkRole = async (sess: any) => {
+        if (!sess?.user) {
+            setUserRole(null);
+            return;
+        }
+        try {
+            const db = await getDB();
+            const profile: any = await db.getFirstAsync('SELECT role FROM profiles WHERE id = ?', [sess.user.id]);
+            if (profile) {
+                setUserRole(profile.role);
+            }
+        } catch (e) {
+            console.error('Role check error:', e);
+        }
+    };
+
+    // Removed handleBiometricAuth from here since it's now global
 
     useEffect(() => {
         const initializeApp = async () => {
@@ -2839,13 +2981,27 @@ export default function App() {
                 // Initialize SQLite
                 await initDB();
 
-                // Fetch Session
+                // Check for existing session
                 const { data: { session: currentSession } } = await supabase.auth.getSession();
-                setSession(currentSession);
 
                 if (currentSession) {
+                    setSession(currentSession);
+                    checkRole(currentSession);
                     // Initial Sync - Await it to ensure data is present on first load
-                    await SyncService.pullAll().catch(console.error);
+                    SyncService.pullAll().catch(console.error);
+                } else {
+                    // Try offline biometric auth if we have local profiles with offline login enabled
+                    const db = await getDB();
+                    const lastProfile: any = await db.getFirstAsync('SELECT * FROM profiles WHERE offline_login_enabled = 1 LIMIT 1');
+
+                    if (lastProfile) {
+                        const success = await handleBiometricAuth('Authenticate to access Helpdesk Offline');
+                        if (success) {
+                            // Simulate session for offline use
+                            setSession({ user: { id: lastProfile.id, email: lastProfile.email }, offline: true });
+                            setUserRole(lastProfile.role);
+                        }
+                    }
                 }
             } catch (error) {
                 console.error('Initialization error:', error);
@@ -2858,7 +3014,12 @@ export default function App() {
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             setSession(session);
-            if (session) SyncService.pullAll().catch(console.error);
+            if (session) {
+                checkRole(session);
+                SyncService.pullAll().catch(console.error);
+            } else {
+                setUserRole(null);
+            }
         });
 
         // Periodic Sync (Every 5 minutes if online)
@@ -2900,19 +3061,22 @@ export default function App() {
                 >
                     <Drawer.Screen
                         name="Overview"
-                        component={HomeStack}
                         options={{ drawerIcon: ({ color, size }) => <LayoutDashboard color={color} size={size} /> }}
-                    />
+                    >
+                        {(props) => <HomeStack {...props} userRole={userRole} />}
+                    </Drawer.Screen>
                     <Drawer.Screen
                         name="Inventory"
-                        component={InventoryScreen}
                         options={{ drawerIcon: ({ color, size }) => <Package color={color} size={size} /> }}
-                    />
+                    >
+                        {(props) => <InventoryScreen {...props} userRole={userRole} />}
+                    </Drawer.Screen>
                     <Drawer.Screen
                         name="Desks"
-                        component={DesksScreen}
                         options={{ drawerIcon: ({ color, size }) => <Building color={color} size={size} /> }}
-                    />
+                    >
+                        {(props) => <DesksScreen {...props} userRole={userRole} />}
+                    </Drawer.Screen>
                     <Drawer.Screen
                         name="Maintenance"
                         component={MaintenanceScreen}
@@ -2920,9 +3084,10 @@ export default function App() {
                     />
                     <Drawer.Screen
                         name="Complaints"
-                        component={ComplaintsScreen}
                         options={{ drawerIcon: ({ color, size }) => <AlertTriangle color={color} size={size} /> }}
-                    />
+                    >
+                        {(props) => <ComplaintsScreen {...props} userRole={userRole} />}
+                    </Drawer.Screen>
                     <Drawer.Screen
                         name="Requests"
                         component={RequestsScreen}

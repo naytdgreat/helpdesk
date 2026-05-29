@@ -148,8 +148,10 @@ export const initDB = async (): Promise<SQLite.SQLiteDatabase> => {
                 `CREATE TABLE IF NOT EXISTS profiles(
     id TEXT PRIMARY KEY,
     name TEXT,
+    email TEXT,
     hospital_id TEXT,
-    role TEXT
+    role TEXT,
+    offline_login_enabled INTEGER DEFAULT 0
 )`,
                 `CREATE TABLE IF NOT EXISTS sync_queue(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,7 +172,7 @@ export const initDB = async (): Promise<SQLite.SQLiteDatabase> => {
                 devices: ['physical_condition', 'deployment_status'],
                 maintenance_logs: ['performer_type', 'performer_name', 'update_condition'],
                 complaints: ['notes', 'category', 'device_id', 'desk_id'],
-                profiles: ['role']
+                profiles: ['role', 'email', 'offline_login_enabled']
             };
 
             for (const [table, columns] of Object.entries(tablesToCheck)) {

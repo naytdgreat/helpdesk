@@ -53,12 +53,13 @@ export default function HierarchyPage() {
     async function fetchHospitals() {
         setLoading(true);
         const { data } = await supabase.from('hospitals').select('*').order('name');
-        setHospitals(data || []);
+        const hospitals = (data || []) as any[];
+        setHospitals(hospitals);
         setLoading(false);
 
         // Auto-select if only one facility (e.g. Admin view)
-        if (data && data.length === 1) {
-            fetchWings(data[0].id);
+        if (hospitals.length === 1) {
+            fetchWings(hospitals[0].id);
         }
     }
 
@@ -140,7 +141,7 @@ export default function HierarchyPage() {
             if (deleteType === 'WING') table = 'wings';
             if (deleteType === 'OFFICE') table = 'offices';
 
-            const { error } = await supabase.from(table).delete().eq('id', deleteId);
+            const { error } = await (supabase.from as any)(table).delete().eq('id', deleteId);
             if (error) throw error;
 
             // Refresh data based on type
@@ -183,7 +184,7 @@ export default function HierarchyPage() {
         if (!editName.trim()) return;
         try {
             const table = type === 'HOSPITAL' ? 'hospitals' : 'wings';
-            const { error } = await supabase.from(table).update({ name: editName } as any).eq('id', id);
+            const { error } = await (supabase.from as any)(table).update({ name: editName }).eq('id', id);
 
             if (error) throw error;
 

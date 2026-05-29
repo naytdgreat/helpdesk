@@ -23,7 +23,7 @@ import { format } from 'date-fns';
 import Pagination from '@/components/Pagination';
 import { useSearchParams } from 'next/navigation';
 
-export default function ComplaintsPage() {
+function ComplaintsPageContent() {
     const searchParams = useSearchParams();
     const [complaints, setComplaints] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -135,11 +135,14 @@ export default function ComplaintsPage() {
 
     async function fetchUsers() {
         try {
-            const { data: profile } = await supabase
+            const user = (await supabase.auth.getUser()).data.user;
+            if (!user) return;
+
+            const { data: profile } = (await supabase
                 .from('profiles')
                 .select('hospital_id')
-                .eq('id', (await supabase.auth.getUser()).data.user?.id)
-                .single();
+                .eq('id', user.id)
+                .single()) as any;
 
             if (!profile?.hospital_id) return;
 
@@ -195,8 +198,8 @@ export default function ComplaintsPage() {
 
         try {
             setIsSubmitting(true);
-            const { error } = await supabase
-                .from('complaints')
+            const { error } = await (supabase
+                .from('complaints') as any)
                 .update({
                     reporter_name: editComplaintData.reporter_name,
                     description: editComplaintData.description,
@@ -226,8 +229,8 @@ export default function ComplaintsPage() {
 
         try {
             setIsSubmitting(true);
-            const { error } = await supabase
-                .from('complaints')
+            const { error } = await (supabase
+                .from('complaints') as any)
                 .update({
                     status: statusFormData.status,
                     notes: statusFormData.notes || null
@@ -254,8 +257,8 @@ export default function ComplaintsPage() {
 
         try {
             setIsSubmitting(true);
-            const { error } = await supabase
-                .from('complaints')
+            const { error } = await (supabase
+                .from('complaints') as any)
                 .update({
                     assigned_to_id: assignFormData.assigned_to_id || null
                 })
@@ -313,8 +316,8 @@ export default function ComplaintsPage() {
 
         try {
             setIsSubmitting(true);
-            const { error } = await supabase
-                .from('complaints')
+            const { error } = await (supabase
+                .from('complaints') as any)
                 .insert([{
                     reporter_name: formData.reporter_name,
                     description: formData.description,
@@ -858,5 +861,18 @@ export default function ComplaintsPage() {
                 )
             }
         </DashboardLayout>
+    );
+}
+
+export default function ComplaintsPage() {
+    return (
+        <React.Suspense fallback={
+            <div className="p-8 text-center text-slate-500 flex flex-col items-center gap-2">
+                <Loader2 className="animate-spin text-blue-500" size={24} />
+                <span>Loading complaints...</span>
+            </div>
+        }>
+            <ComplaintsPageContent />
+        </React.Suspense>
     );
 }

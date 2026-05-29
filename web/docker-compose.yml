@@ -1,0 +1,9 @@
+services:
+  web:
+    build: .
+    container_name: gha-helpdesk-web
+    ports:
+      - "80:3000"
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped

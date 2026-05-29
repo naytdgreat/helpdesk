@@ -15,7 +15,7 @@ import {
     UserCircle,
     Building2,
     Users,
-
+    BarChart2,
     Loader2,
     Bell,
     Check
@@ -153,6 +153,7 @@ export default function DashboardLayout({
                     <SidebarItem icon={Hammer} label="Maintenance" href="/maintenance" />
                     <SidebarItem icon={FileWarning} label="Complaints" href="/complaints" />
                     <SidebarItem icon={ClipboardList} label="Requests" href="/requests" />
+                    <SidebarItem icon={BarChart2} label="Reports" href="/reports" />
 
                     {['ADMIN', 'SUPER_ADMIN'].includes(role) && (
                         <div className="pt-4 mt-4 border-t border-slate-100">
